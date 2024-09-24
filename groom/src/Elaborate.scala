@@ -6,5 +6,8 @@ object Elaborate extends App {
     "disallowPackedArrays",
     "locationInfoStyle=wrapInAtSquareBracket"
   ).reduce(_ + "," + _))
-  circt.stage.ChiselStage.emitSystemVerilogFile(new gcd.GCD(), args, firtoolOptions)
+
+  val groomParam: GroomParameter = GroomParameter()
+
+  circt.stage.ChiselStage.emitSystemVerilogFile(new Groom(groomParam), args, firtoolOptions)
 }
