@@ -7,6 +7,7 @@ import chisel3._
 import chisel3.experimental.hierarchy.{Instance, Instantiate}
 import chisel3.util._
 import chisel3.util.experimental.decode.DecodeBundle
+import cats.instances.int
 // import org.chipsalliance.t1.rtl.decoder.{Decoder, TableGenerator}
 // import org.chipsalliance.t1.rtl.lane.Distributor
 
@@ -372,4 +373,16 @@ package object rtl {
   //   ) ++ Option.when(parameter.fpuEnable)(inputDecode(Decoder.float))
   //   VecInit(executeList).asUInt
   // }
+
+  def MaskUpper(in: UInt): UInt = {
+    val n = in.getWidth
+    (0 until n).map(i => (in << i.U)(n-1,0)).reduce(_|_)
+  }
+
+  def NextPc(pc: UInt, fetchBytes: Int, paddrBits: Int): UInt = {
+    val pcAligned = pc(paddrBits-1, log2Ceil(fetchBytes))
+    val pcNext = pcAligned + 1.U
+    pcNext ## 0.U(log2Ceil(fetchBytes).W)
+  }
 }
+

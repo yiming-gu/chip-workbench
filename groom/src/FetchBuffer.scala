@@ -2,7 +2,6 @@ package groom.rtl.frontend
 
 import chisel3._
 import chisel3.util._
-import scala.annotation.meta.param
 import org.chipsalliance.t1.rtl._
 
 case class FetchBufferParameter(
@@ -34,8 +33,8 @@ class FetchBufferResp(parameter: FetchBufferParameter) extends Bundle {
 
 class FetchBufferInterface(parameter: FetchBufferParameter) extends Bundle {
   val clear = Input(Bool())
-  val req  = Flipped(DecoupledIO(new FetchBufferReq(parameter)))
-  val resp = DecoupledIO(new FetchBufferResp(parameter))
+  val enq = Flipped(DecoupledIO(new FetchBufferReq(parameter)))
+  val deq = DecoupledIO(new FetchBufferResp(parameter))
 }
 
 class FetchBuffer(parameter: FetchBufferParameter) extends Module {
@@ -49,18 +48,18 @@ class FetchBuffer(parameter: FetchBufferParameter) extends Module {
 
   def inc(ptr: UInt): UInt = {
     val n = ptr.getWidth
-    Cat(ptr(n-2,0), ptr(n-1))
+    Cat(ptr(n-2, 0), ptr(n-1))
   }
 
   for (i <- 0 until parameter.fetchBufferEntries) {
     fetchBufferMatrix(i/parameter.decodeWidth)(i%parameter.decodeWidth) := fetchBuffer(i)
   }
 
-  val inMask: Vec[Bool] = cutUInt(io.req.bits.mask, 1).asTypeOf(Vec(parameter.fetchWidth, Bool()))
-  val inUops: Vec[FetchPacket] = VecInit(io.req.bits.inst.zipWithIndex.map {case (inst, index) =>
+  val inMask: Vec[Bool] = cutUInt(io.enq.bits.mask, 1).asTypeOf(Vec(parameter.fetchWidth, Bool()))
+  val inUops: Vec[FetchPacket] = VecInit(io.enq.bits.inst.zipWithIndex.map {case (inst, index) =>
     val fetchPacket = new FetchPacket(parameter)
     fetchPacket.inst := inst
-    fetchPacket.pc := io.req.bits.pc(parameter.paddrBits-1, log2Ceil(parameter.fetchWidth)) ## index.asUInt(log2Ceil(parameter.fetchWidth).W)
+    fetchPacket.pc := io.enq.bits.pc(parameter.paddrBits-1, log2Ceil(parameter.fetchWidth)) ## index.asUInt(log2Ceil(parameter.fetchWidth).W)
     fetchPacket
   })
 
@@ -81,38 +80,58 @@ class FetchBuffer(parameter: FetchBufferParameter) extends Module {
 
   val mayFull = RegInit(false.B)
 
-  def rotateLeft(in : UInt, k : Int) = {
+  def rotateLeft(in: UInt, k: Int): UInt = {
     val n = in.getWidth
-    Cat(in(n-k-1,0),in(n-1,n-k))
+    in(n-k-1, 0) ## in(n-1, n-k)
   }
 
-  val mayHitHead = (1 until parameter.fetchWidth).map(k =>
-    VecInit(rotateLeft(tail1H, k).asBools.zipWithIndex.filter {
-      case (bit,idx) => idx % parameter.decodeWidth == 0
-    }.map {case (bit,idx) => bit}).asUInt
-  ).map(newTail => head1H & newTail).reduce(_|_).orR
+  val mayHitHead = (1 until parameter.fetchWidth).map { k =>
+    VecInit(rotateLeft(tail1H, k).asBools.zipWithIndex.filter { case (bit,idx) =>
+      idx % parameter.decodeWidth == 0
+    }.map { case (bit, idx) => bit }).asUInt
+  }.map { newTail => head1H & newTail }.reduce(_|_).orR
 
   val atHead = (
-    VecInit(tail1H.asBools.zipWithIndex.filter {
-      case (bit,idx) => idx % parameter.decodeWidth == 0
-    }.map {case (bit,idx) => bit}).asUInt & head1H
+    VecInit(tail1H.asBools.zipWithIndex.filter { case (bit, idx) =>
+      idx % parameter.decodeWidth == 0
+    }.map { case (bit, idx) => bit }).asUInt & head1H
   ).orR
 
-  val doEnqueue = !(atHead && mayFull || mayHitHead)
+  val doEnqueue = !((atHead && mayFull) || mayHitHead)
 
-  val mayHitTail = VecInit((0 until parameter.fetchBufferEntries).map(
-    idx => head1H(idx / parameter.decodeWidth) && (!mayFull || (idx % parameter.decodeWidth!= 0).B)
+  val mayHitTail = VecInit((0 until parameter.fetchBufferEntries).map(idx =>
+    head1H(idx / parameter.decodeWidth) && (!mayFull || (idx % parameter.decodeWidth != 0).B)
   )).asUInt & tail1H
 
-  val slotWillHitTail = (0 until parameter.fetchPacketNum).map(
-    i => mayHitTail((i + 1) * parameter.decodeWidth - 1, i * parameter.decodeWidth)
-  ).reduce(_|_)
+  val slotWillHitTail = (0 until parameter.fetchPacketNum).map { i =>
+    mayHitTail((i + 1) * parameter.decodeWidth - 1, i * parameter.decodeWidth)
+  }.reduce(_|_)
 
   val willHitTail = slotWillHitTail.orR
 
-  val doDequeue = io.resp.ready && !willHitTail
+  val doDequeue = io.deq.ready && !willHitTail
   val deqValid = (~MaskUpper(slotWillHitTail)).asBools
 
-  io.req.ready := doEnqueue
-  io.resp.bits.uops.zip(Mux1H(head1H, fetchBufferMatrix)).map {case (d, q) => d.bits := q}
+  io.enq.ready := doEnqueue
+  io.deq.valid := deqValid.reduce(_||_)
+  io.deq.bits.uops.zip(deqValid).map { case (d, v) => d.valid := v }
+  io.deq.bits.uops.zip(Mux1H(head1H, fetchBufferMatrix)).map { case (d, q) => d.bits := q }
+
+  when (doEnqueue) {
+    tail1H := enqIdx
+    when (inMask.reduce(_||_)) {
+      mayFull := true.B
+    }
+  }
+
+  when (doDequeue) {
+    head1H := inc(head1H)
+    mayFull := false.B
+  }
+
+  when (io.clear) {
+    head1H := 1.U
+    tail1H := 1.U
+    mayFull := false.B
+  }
 }
