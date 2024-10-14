@@ -47,9 +47,9 @@ object CustomInstructions {
   )
 }
 
-object DecoderParameter {
-  implicit def rwP: upickle.default.ReadWriter[DecoderParameter] = upickle.default.macroRW[DecoderParameter]
-}
+// object DecoderParameter {
+//   implicit def rwP: upickle.default.ReadWriter[DecoderParameter] = upickle.default.macroRW[DecoderParameter]
+// }
 
 case class DecoderParameter(
   instructionSets:   Set[String],

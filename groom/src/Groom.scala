@@ -26,6 +26,9 @@ case class GroomParameter(
   instructionSets:        Set[String],
   flushOnFenceI:          Boolean,
   mulUnroll:              Int,
+  paddrBits:              Int,
+  cacheBlockBytes:        Int,
+  dcacheNSets:            Int,
 ) {
   // def icacheParameter: ICacheParameter = ICacheParameter(
   //   fetchBytes = 16,
@@ -35,6 +38,18 @@ case class GroomParameter(
   //   blockBytes = 64,
   //   busBytes   = 4
   // )
+
+  def usingVector = hasInstructionSet("rv_v")
+
+  // fixed for now
+  def usingRVE = false
+  def usingDataScratchpad: Boolean = false
+  def hasDataECC:          Boolean = false
+  def vmidBits      = 0
+  def nPerfCounters = 0
+
+  // calculated
+  def lgNXRegs = if (usingRVE) 4 else 5
 
   def pipelinedMul: Boolean = usingMulDiv && mulUnroll == xLen
 
@@ -59,7 +74,7 @@ case class GroomParameter(
       }
       .sortBy(i => (i.instructionSet.name, i.name))
 
-  def coreInstBytes = 32 / 8
+  def coreInstBytes = (if (usingCompressed) 16 else 32) / 8
 
   private def hasInstructionSet(setName: String): Boolean =
     instructions.flatMap(_.instructionSets.map(_.name)).contains(setName)
@@ -91,6 +106,96 @@ case class GroomParameter(
     else
       fLen
 
+  def usingMulDiv = hasInstructionSet("rv_m") || hasInstructionSet("rv64_m")
+
+  def usingAtomics = hasInstructionSet("rv_a") || hasInstructionSet("rv64_a")
+
+  def usingVM = hasInstructionSet("sfence.vma")
+
+  def usingSupervisor = hasInstruction("sret")
+
+  // static to false for now
+  def usingHypervisor = hasInstructionSet("rv_h") || hasInstructionSet("rv64_h")
+
+  def usingDebug = hasInstructionSet("rv_sdext")
+
+  def usingCompressed = hasInstructionSet("rv_c")
+
+  def usingFPU = fLen.isDefined
+
+  // static to false for now
+  def haveCease = hasInstruction("cease")
+
+  // static to false for now
+  def usingNMI = hasInstructionSet("rv_smrnmi")
+
+  // calculated parameter
+  def fetchWidth: Int = if (usingCompressed) 2 else 1
+
+  def resetVectorLen: Int = {
+    val externalLen = paddrBits
+    require(externalLen <= xLen, s"External reset vector length ($externalLen) must be <= XLEN ($xLen)")
+    require(
+      externalLen <= vaddrBitsExtended,
+      s"External reset vector length ($externalLen) must be <= virtual address bit width ($vaddrBitsExtended)"
+    )
+    externalLen
+  }
+
+  val nLocalInterrupts: Int = 0
+
+  def pgIdxBits:                  Int = 12
+  def pgLevels:                   Int = if (xLen == 64) 3 /* Sv39 */ else 2 /* Sv32 */
+  def pgLevelBits:                Int = 10 - log2Ceil(xLen / 32)
+  def maxSVAddrBits:              Int = pgIdxBits + pgLevels * pgLevelBits
+  def maxHypervisorExtraAddrBits: Int = 2
+  def hypervisorExtraAddrBits:    Int = if (usingHypervisor) maxHypervisorExtraAddrBits else 0
+  def maxHVAddrBits:              Int = maxSVAddrBits + hypervisorExtraAddrBits
+  def vaddrBits:                  Int = if (usingVM) {
+    val v = maxHVAddrBits
+    require(v == xLen || xLen > v && v > paddrBits)
+    v
+  } else {
+    // since virtual addresses sign-extend but physical addresses
+    // zero-extend, make room for a zero sign bit for physical addresses
+    (paddrBits + 1).min(xLen)
+  }
+  def vpnBits:                    Int = vaddrBits - pgIdxBits
+  def ppnBits:                    Int = paddrBits - pgIdxBits
+  def vpnBitsExtended:            Int = vpnBits + (if (vaddrBits < xLen) (if (usingHypervisor) 1 else 0) + 1 else 0)
+
+  def vaddrBitsExtended: Int         = vpnBitsExtended + pgIdxBits
+  // btb entries
+  def btbEntries:        Int         = 28
+  def bhtHistoryLength:  Option[Int] = Some(8)
+  def bhtCounterLength:  Option[Int] = Some(1)
+  def coreInstBits:      Int         = if (usingCompressed) 16 else 32
+  def coreMaxAddrBits:   Int         = paddrBits.max(vaddrBitsExtended)
+  def lgCacheBlockBytes: Int         = log2Ceil(cacheBlockBytes)
+  def blockOffBits = lgCacheBlockBytes
+  // todo: 64 -> dcacheParan.nset
+  def idxBits:              Int     = log2Ceil(dcacheNSets)
+  // dCache untage bits
+  def untagBits:            Int     = blockOffBits + idxBits
+  def dcacheReqTagBits:     Int     = 6
+  def dcacheArbPorts:       Int     = 1 + (if (usingVM) 1 else 0) + (if (usingDataScratchpad) 1 else 0)
+  def coreDataBits:         Int     = xLen.max(fLen.getOrElse(0))
+  def coreDataBytes:        Int     = coreDataBits / 8
+  def separateUncachedResp: Boolean = false
+  def minPgLevels:          Int     = {
+    val res = xLen match {
+      case 32 => 2
+      case 64 => 3
+    }
+    require(pgLevels >= res)
+    res
+  }
+
+  def maxPAddrBits: Int = {
+    require(xLen == 32 || xLen == 64, s"Only XLENs of 32 or 64 are supported, but got $xLen")
+    xLen match { case 32 => 34; case 64 => 56 }
+  }
+
   val decoderParameter = DecoderParameter(
     instructionSets,
     pipelinedMul,
@@ -99,8 +204,6 @@ case class GroomParameter(
     minFLen.getOrElse(16),
     xLen
   )
-
-  def usingMulDiv = hasInstructionSet("rv_m") || hasInstructionSet("rv64_m")
 }
 
 class Groom(parameter: GroomParameter) extends Module {
