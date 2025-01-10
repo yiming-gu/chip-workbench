@@ -6,21 +6,27 @@ import mill.scalalib.scalafmt._
 import mill.scalalib.TestModule.Utest
 import mill.util.Jvm
 import coursier.maven.MavenRepository
+import $file.common
+import $file.dependencies.chisel.build
 import $file.dependencies.arithmetic.common
 import $file.dependencies.`chisel-interface`.common
 import $file.dependencies.`berkeley-hardfloat`.common
 import $file.dependencies.rvdecoderdb.common
-import $file.common
 
 object v {
-  val scala    = "2.13.14"
-  val chisel   = ivy"org.chipsalliance::chisel:6.5.0"
-  val chiselPlugin = ivy"org.chipsalliance:::chisel-plugin:6.5.0"
+  val scala    = "2.13.15"
   val mainargs = ivy"com.lihaoyi::mainargs:0.5.0"
   val oslib    = ivy"com.lihaoyi::os-lib:0.9.1"
   val upickle  = ivy"com.lihaoyi::upickle:3.3.1"
   val spire    = ivy"org.typelevel::spire:latest.integration"
   val evilplot = ivy"io.github.cibotech::evilplot:latest.integration"
+}
+
+object chisel extends Chisel
+
+trait Chisel extends millbuild.dependencies.chisel.build.Chisel {
+  def crossValue              = v.scala
+  override def millSourcePath = os.pwd / "dependencies" / "chisel"
 }
 
 object arithmetic extends Arithmetic
@@ -29,10 +35,10 @@ trait Arithmetic extends millbuild.dependencies.arithmetic.common.ArithmeticModu
   override def millSourcePath = os.pwd / "dependencies" / "arithmetic" / "arithmetic"
   def scalaVersion            = T(v.scala)
 
-  def chiselModule    = None
-  def chiselPluginJar = None
-  def chiselIvy       = Some(v.chisel)
-  def chiselPluginIvy = Some(v.chiselPlugin)
+  def chiselModule    = Some(chisel)
+  def chiselPluginJar = T(Some(chisel.pluginModule.jar()))
+  def chiselIvy       = None
+  def chiselPluginIvy = None
 
   def spireIvy:    T[Dep] = v.spire
   def evilplotIvy: T[Dep] = v.evilplot
@@ -46,10 +52,10 @@ trait AXI4 extends millbuild.dependencies.`chisel-interface`.common.AXI4Module {
 
   def mainargsIvy = v.mainargs
 
-  def chiselModule    = None
-  def chiselPluginJar = None
-  def chiselIvy       = Some(v.chisel)
-  def chiselPluginIvy = Some(v.chiselPlugin)
+  def chiselModule    = Some(chisel)
+  def chiselPluginJar = T(Some(chisel.pluginModule.jar()))
+  def chiselIvy       = None
+  def chiselPluginIvy = None
 }
 
 object hardfloat extends Hardfloat
@@ -58,10 +64,10 @@ trait Hardfloat extends millbuild.dependencies.`berkeley-hardfloat`.common.Hardf
   override def millSourcePath = os.pwd / "dependencies" / "berkeley-hardfloat" / "hardfloat"
   def scalaVersion            = T(v.scala)
 
-  def chiselModule    = None
-  def chiselPluginJar = None
-  def chiselIvy       = Some(v.chisel)
-  def chiselPluginIvy = Some(v.chiselPlugin)
+  def chiselModule    = Some(chisel)
+  def chiselPluginJar = T(Some(chisel.pluginModule.jar()))
+  def chiselIvy       = None
+  def chiselPluginIvy = None
 }
 
 object rvdecoderdb extends RVDecoderDB
@@ -88,10 +94,10 @@ trait Groom extends millbuild.common.GroomModule with ScalafmtModule {
   def rvdecoderdbModule = rvdecoderdb
   def riscvOpcodesPath  = T.input(PathRef(os.pwd / "dependencies" / "riscv-opcodes"))
 
-  def chiselModule    = None
-  def chiselPluginJar = None
-  def chiselIvy       = Some(v.chisel)
-  def chiselPluginIvy = Some(v.chiselPlugin)
+  def chiselModule    = Some(chisel)
+  def chiselPluginJar = T(Some(chisel.pluginModule.jar()))
+  def chiselIvy       = None
+  def chiselPluginIvy = None
 }
 
 // object configgen extends ConfigGen
@@ -144,40 +150,37 @@ trait Groom extends millbuild.common.GroomModule with ScalafmtModule {
 //   def chiselIvy       = None
 // }
 
-// object panamaconverter extends PanamaConverter
+object panamaconverter extends PanamaConverter
 
-// trait PanamaConverter extends millbuild.dependencies.chisel.build.PanamaConverter {
-//   def crossValue = v.scala
+trait PanamaConverter extends millbuild.dependencies.chisel.build.PanamaConverter {
+  def crossValue = v.scala
 
-//   override def millSourcePath = os.pwd / "dependencies" / "chisel" / "panamaconverter"
+  override def millSourcePath = os.pwd / "dependencies" / "chisel" / "panamaconverter"
 
-//   def scalaVersion = T(v.scala)
-// }
+  def scalaVersion = T(v.scala)
+}
 
-// // Module to generate RTL from json config
-// object elaborator extends Elaborator
+// Module to generate RTL from json config
+object elaborator extends Elaborator
 
-// trait Elaborator extends millbuild.common.ElaboratorModule {
-//   def scalaVersion = T(v.scala)
+trait Elaborator extends millbuild.common.ElaboratorModule {
+  def scalaVersion = T(v.scala)
 
-//   def panamaconverterModule = panamaconverter
+  def panamaconverterModule = panamaconverter
 
-//   def circtInstallPath = T.input(PathRef(os.Path(T.ctx().env("CIRCT_INSTALL_PATH"))))
+  def circtInstallPath = T.input(PathRef(os.Path(T.ctx().env("CIRCT_INSTALL_PATH"))))
 
-//   def generators = Seq(
-//     groom,
-//     groomemu,
-//     rocketv,
-//     rocketemu
-//   )
+  def generators = Seq(
+    groom,
+  )
 
-//   def mainargsIvy = v.mainargs
+  def mainargsIvy = v.mainargs
 
-//   def chiselModule    = Some(chisel)
-//   def chiselPluginJar = T(Some(chisel.pluginModule.jar()))
-//   def chiselPluginIvy = None
-//   def chiselIvy       = None
-// }
+  def chiselModule    = Some(chisel)
+  def chiselPluginJar = T(Some(chisel.pluginModule.jar()))
+  def chiselPluginIvy = None
+  def chiselIvy       = None
+}
 
 // object omreaderlib extends OMReaderLib
 

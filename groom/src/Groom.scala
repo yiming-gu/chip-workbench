@@ -21,6 +21,13 @@ import chisel3.util.{
 import org.chipsalliance.rocketv.{Decoder, DecoderParameter}
 import org.chipsalliance.rocketv.rvdecoderdbcompat.Causes
 import org.chipsalliance.rvdecoderdb.Instruction
+import groom.rtl.frontend._
+import groom.rtl.backend._
+import org.chipsalliance.rocketv.DecoderInterface
+
+object GroomParameter {
+  implicit def rwP: upickle.default.ReadWriter[GroomParameter] = upickle.default.macroRW[GroomParameter]
+}
 
 case class GroomParameter(
   instructionSets:        Set[String],
@@ -29,15 +36,9 @@ case class GroomParameter(
   paddrBits:              Int,
   cacheBlockBytes:        Int,
   dcacheNSets:            Int,
-) {
-  // def icacheParameter: ICacheParameter = ICacheParameter(
-  //   fetchBytes = 16,
-  //   nSets      = 64,
-  //   nWays      = 8,
-  //   paddrBits  = 32,
-  //   blockBytes = 64,
-  //   busBytes   = 4
-  // )
+  renameWidth:            Int,
+  pregNum:                Int,
+) extends SerializableModuleParameter {
 
   def usingVector = hasInstructionSet("rv_v")
 
@@ -204,9 +205,34 @@ case class GroomParameter(
     minFLen.getOrElse(16),
     xLen
   )
+
+  val icacheParameter: ICacheParameter = ICacheParameter(
+    fetchBytes = 16,
+    nSets      = 64,
+    nWays      = 8,
+    paddrBits  = 32,
+    blockBytes = 64,
+    busBytes   = 4
+  )
+
+  val freelistParameter: FreeListParameter = FreeListParameter(
+    renameWidth = renameWidth,
+    pregNum = pregNum,
+  )
 }
 
-class Groom(parameter: GroomParameter) extends Module {
+class GroomInterface(parameter: GroomParameter) extends Bundle {
+  val freelistIo = new FreeListInterface(parameter.freelistParameter)
+  val decoderIo = new DecoderInterface(parameter.decoderParameter)
+}
 
+class Groom(val parameter: GroomParameter) extends Module with SerializableModule[GroomParameter] {
+
+  val io = IO(new GroomInterface(parameter))
+  // val icache: Instance[ICache] = Instantiate(new ICache(parameter.icacheParameter))
+  val freelist: Instance[FreeList] = Instantiate(new FreeList(parameter.freelistParameter))
   val decoder: Instance[Decoder] = Instantiate(new Decoder(parameter.decoderParameter))
+
+  freelist.io <> io.freelistIo
+  decoder.io <> io.decoderIo
 }

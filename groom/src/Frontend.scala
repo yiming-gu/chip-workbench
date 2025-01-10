@@ -36,10 +36,11 @@ case class FrontendParameter(
 }
 
 class FrontendInterface(parameter: FrontendParameter) extends Bundle {
-
+  val fetchPacket = DecoupledIO(new FetchBufferResp(parameter.fetchBufferParameter))
 }
 
 class Frontend(parameter: FrontendParameter) extends Bundle {
+  val io = IO(new FrontendInterface(parameter))
 
   val snpc = Wire(UInt(32.W))
   val pc = RegEnable(snpc, "h80000000".U(32.W), iCache.io.req.fire)
@@ -61,10 +62,13 @@ class Frontend(parameter: FrontendParameter) extends Bundle {
   fetchBuffer.io.enq.valid := iCache.io.resp.valid
   fetchBuffer.io.enq.bits.inst := cutUInt(iCache.io.resp.bits.data, parameter.instBytes*8)
   fetchBuffer.io.enq.bits.pc := iCache.io.resp.bits.pc(parameter.paddrBits-1, log2Ceil(parameter.fetchBytes)) ## 0.U(log2Ceil(parameter.fetchBytes).W)
-  fetchBuffer.io.enq.bits.mask := MuxLookup(iCache.io.resp.bits.pc(log2Ceil(parameter.fetchBytes)-1, log2Ceil(parameter.instBytes)), 0.U)(Seq(
-    0.U -> "b1111".U,
-    1.U -> "b1110".U,
-    2.U -> "b1100".U,
-    3.U -> "b1000".U,
-  ))
+  // fetchBuffer.io.enq.bits.mask := MuxLookup(iCache.io.resp.bits.pc(log2Ceil(parameter.fetchBytes)-1, log2Ceil(parameter.instBytes)), 0.U)(Seq(
+  //   0.U -> "b1111".U,
+  //   1.U -> "b1110".U,
+  //   2.U -> "b1100".U,
+  //   3.U -> "b1000".U,
+  // ))
+  fetchBuffer.io.enq.bits.mask := VecInit(Seq.fill(parameter.fetchWidth)(true.B)).asUInt << iCache.io.resp.bits.pc(log2Ceil(parameter.fetchBytes)-1, log2Ceil(parameter.instBytes))
+
+  io.fetchPacket <> fetchBuffer.io.deq
 }

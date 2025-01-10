@@ -1,33 +1,77 @@
+package groom.rtl.backend
+
 import chisel3._
 import chisel3.util._
+import chisel3.experimental.hierarchy.instantiable
+import chisel3.experimental.{SerializableModule, SerializableModuleParameter}
+import chisel3.experimental.hierarchy.public
+
+object FreeListParameter {
+  implicit def rwP: upickle.default.ReadWriter[FreeListParameter] = upickle.default.macroRW[FreeListParameter]
+}
 
 case class FreeListParameter(
   renameWidth: Int,
   pregNum: Int,
-) {
+) extends SerializableModuleParameter {
   val pregSize = log2Ceil(pregNum)
 }
 
 class FreeListInterface(parameter: FreeListParameter) extends Bundle {
   val allocateReq = Input(Vec(parameter.renameWidth, Bool()))
-  val allocatePhyReg = Vec(parameter.renameWidth, Valid(UInt(parameter.pregSize.W)))
+  val allocatePhyReg = Output(Vec(parameter.renameWidth, UInt(parameter.pregSize.W)))
 
   val freeReq = Input(Vec(parameter.renameWidth, Bool()))
   val redirect = Input(Bool())
   val headPRedirect = Input(UInt(parameter.pregSize.W))
 }
 
-class FreeList(parameter: FreeListParameter) extends Module {
+@instantiable
+class FreeList(val parameter: FreeListParameter) extends Module with SerializableModule[FreeListParameter] {
 
-  val io = IO(new FreeListInterface(parameter))
+  @public val io = IO(new FreeListInterface(parameter))
 
-  val freeHeadPOH = RegInit(1.U, UInt(parameter.pregNum.W))  // x0 is fixed
-  val freeTailPOH = RegInit(parameter.pregNum.U, UInt(parameter.pregNum.W))
+  val freeList = RegInit(VecInit(Seq.tabulate(parameter.pregNum)(i => i.U(parameter.pregSize.W))))
 
-  val freeHeadP = RegInit(1.U, UInt(parameter.pregSize.W))
-  val freeTailP = RegInit(parameter.pregNum.U, UInt(parameter.pregNum.W))
+  val freeHeadPOH = RegInit(1.U(parameter.pregNum.W))
+  val freeTailPOH = RegInit(1.U(parameter.pregNum.W))
+
+  val freeHeadP = RegInit(0.U(parameter.pregSize.W))
+  val freeTailP = RegInit(0.U(parameter.pregSize.W))
 
   freeHeadP := Mux(io.redirect, io.headPRedirect, freeHeadP + PopCount(io.allocateReq))
   freeTailP := freeTailP + PopCount(io.freeReq)
 
+  val freeHeadPOHShift = CircularShift(freeHeadPOH)
+  val freeHeadPOHVec = VecInit.tabulate(parameter.renameWidth + 1)(freeHeadPOHShift.left)
+
+  val phyRegCandidates = VecInit(freeHeadPOHVec.map(sel => Mux1H(sel, freeList)))
+  for (i <- 0 until parameter.renameWidth) {
+    io.allocatePhyReg(i) := phyRegCandidates(PopCount(io.allocateReq.take(i)))
+  }
+
+  freeHeadPOH := freeHeadPOHVec(PopCount(io.allocateReq))
+
+}
+
+class CircularShift(data: UInt) {
+  private def helper(step: Int, isLeft: Boolean): UInt = {
+    if (step == 0) {
+      data
+    }
+    else {
+      val splitIndex = if (isLeft) {
+        data.getWidth - (step % data.getWidth)
+      } else {
+        step % data.getWidth
+      }
+      Cat(data(splitIndex - 1, 0), data(data.getWidth - 1, splitIndex))
+    }
+  }
+  def left(step: Int): UInt = helper(step, true)
+  def right(step: Int): UInt = helper(step, false)
+}
+
+object CircularShift {
+  def apply(data: UInt): CircularShift = new CircularShift(data)
 }

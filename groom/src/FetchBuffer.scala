@@ -113,15 +113,13 @@ class FetchBuffer(parameter: FetchBufferParameter) extends Module {
   val deqValid = (~MaskUpper(slotWillHitTail)).asBools
 
   io.enq.ready := doEnqueue
-  io.deq.valid := deqValid.reduce(_||_)
-  io.deq.bits.uops.zip(deqValid).map { case (d, v) => d.valid := v }
+  io.deq.valid := deqValid.reduce(_||_)  // why !willHitTail  for little decodewidth output
+  io.deq.bits.uops.zip(deqValid).map { case (d, v) => d.valid := v }  // each output is valid?
   io.deq.bits.uops.zip(Mux1H(head1H, fetchBufferMatrix)).map { case (d, q) => d.bits := q }
 
-  when (doEnqueue) {
+  when (io.enq.fire) {
     tail1H := enqIdx
-    when (inMask.reduce(_||_)) {
-      mayFull := true.B
-    }
+    mayFull := true.B
   }
 
   when (doDequeue) {

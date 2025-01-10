@@ -4,6 +4,8 @@ import chisel3._
 import chisel3.util._
 import chisel3.util.random._
 import org.chipsalliance.amba.axi4.bundle.{AXI4BundleParameter, AXI4ROIrrevocable, AXI4RWIrrevocable}
+import chisel3.experimental.hierarchy.{instantiable, public, Instance, Instantiate}
+import chisel3.experimental.{SerializableModule, SerializableModuleParameter}
 
 case class ICacheParameter(
   fetchBytes: Int,
@@ -12,7 +14,7 @@ case class ICacheParameter(
   nWays:      Int,
   blockBytes: Int,
   busBytes:   Int
-) {
+) extends SerializableModuleParameter {
   val rowBits:                   Int                 = busBytes * 8
   val blockOffBits:              Int                 = log2Ceil(blockBytes)
   val idxBits:                   Int                 = log2Ceil(nSets)
@@ -64,7 +66,7 @@ class ICacheInterface(parameter: ICacheParameter) extends Bundle {
     org.chipsalliance.amba.axi4.bundle.AXI4ROIrrevocable(parameter.instructionFetchParameter)
 }
 
-class ICache(parameter: ICacheParameter) extends Module {
+class ICache(val parameter: ICacheParameter) extends Module with SerializableModule[ICacheParameter] {
   val io = IO(new ICacheInterface(parameter))
 
   val sNormal :: sFetchAr :: sFetchR :: sWb :: Nil = Enum(4)
@@ -73,7 +75,8 @@ class ICache(parameter: ICacheParameter) extends Module {
   val s0Idx = io.req.bits.addr(parameter.untagBits-1, parameter.blockOffBits)
 
   val s1Addr: UInt = RegEnable(io.req.bits.addr, 0.U, io.req.fire)
-  val s1Valid: Bool = RegEnable(Mux(io.s1Kill, false.B, io.req.valid), false.B, io.req.ready | io.s1Kill)
+  val s1ValidNoKill: Bool = RegEnable(Mux(io.s1Kill, false.B, io.req.valid), false.B, io.req.ready | io.s1Kill)
+  val s1Valid: Bool = !io.s1Kill && s1ValidNoKill
   val s1Tag  = s1Addr(parameter.paddrBits-1, parameter.untagBits)
   val s1Idx  = s1Addr(parameter.untagBits-1, parameter.blockOffBits)
   val s1FetchIdx = s1Addr(parameter.blockOffBits-1, log2Ceil(parameter.fetchBytes))
@@ -83,14 +86,15 @@ class ICache(parameter: ICacheParameter) extends Module {
   val validArray = RegEnable(
     validArrayNext,
     0.U((parameter.nSets * parameter.nWays).W),
-    validArrayEn)
+    validArrayEn
+  )
   val tagArray   = SyncReadMem(
     parameter.nSets,
     Vec(parameter.nWays, UInt(parameter.tagBits.W))
   )
   val dataArray  = SyncReadMem(
     parameter.nSets * parameter.nWays * (parameter.blockBytes/parameter.fetchBytes),
-    UInt(parameter.fetchBytes.W)
+    UInt((parameter.fetchBytes*8).W)
   )
 
   val tagReadData: Vec[UInt] = tagArray.read(s0Idx)
@@ -103,11 +107,12 @@ class ICache(parameter: ICacheParameter) extends Module {
   val s1HitWayNum: UInt = OHToUInt(s1TagHit)
   val s1s2Valid: Bool = s1Valid
   val s1s2Ready: Bool = Wire(Bool())
-  val s1s2Fire: Bool = s1s2Valid & s1s2Ready
+  val s1s2Fire: Bool = s1s2Valid && s1s2Ready
 
   val data = dataArray.read(s1Idx ## s1HitWayNum ## s1FetchIdx)
 
-  val s2Valid: Bool = RegEnable(Mux(io.s2Kill, false.B, s1Valid), false.B, s1s2Ready | io.s2Kill)
+  val s2ValidNoKill: Bool = RegEnable(Mux(io.s2Kill, false.B, s1Valid), false.B, s1s2Ready | io.s2Kill)
+  val s2Valid: Bool = !io.s2Kill && s2ValidNoKill
   val s2Hit: Bool = RegEnable(s1Hit, false.B, s1s2Fire)
   val s2HitWayNum: UInt = RegEnable(s1HitWayNum, 0.U, s1s2Fire)
   val s2Addr: UInt = RegEnable(s1Addr, 0.U, s1s2Fire)
@@ -116,7 +121,7 @@ class ICache(parameter: ICacheParameter) extends Module {
 
   val refillIdx = s2Addr(parameter.untagBits-1, parameter.blockOffBits)
   val refillTag = s2Addr(parameter.paddrBits-1, parameter.untagBits)
-  val replWay     = LFSR(log2Ceil(parameter.nWays), s1Valid && ~s2Hit && iCacheState === sNormal)
+  val replWay = LFSR(log2Ceil(parameter.nWays), s1Valid && ~s2Hit && iCacheState === sNormal)
   val refillBufWriteEn = io.instructionFetchAXI.r.fire
   val refillData = Wire(UInt((parameter.fetchBytes*8).W))
   val refillWriteCntNext = Wire(UInt(log2Ceil(parameter.fetchBytes/parameter.busBytes).W))
@@ -144,7 +149,7 @@ class ICache(parameter: ICacheParameter) extends Module {
   validArrayNext := validArray.bitSet(refillIdx ## replWay, true.B)
 
   when (iCacheState === sNormal) {
-    iCacheState := Mux(s1Valid & ~s1Hit, sFetchAr, sNormal)
+    iCacheState := Mux(s1Valid && !s1Hit, sFetchAr, sNormal)
   }
   .elsewhen (iCacheState === sFetchAr) {
     iCacheState := Mux(io.instructionFetchAXI.ar.fire, sFetchR, sFetchAr)
