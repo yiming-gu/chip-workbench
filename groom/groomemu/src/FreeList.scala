@@ -5,6 +5,7 @@ import chisel3.util._
 import chisel3.experimental.hierarchy.instantiable
 import chisel3.experimental.{SerializableModule, SerializableModuleParameter}
 import chisel3.experimental.hierarchy.public
+import org.chipsalliance.t1.rtl._
 
 object FreeListParameter {
   implicit def rwP: upickle.default.ReadWriter[FreeListParameter] = upickle.default.macroRW[FreeListParameter]
@@ -29,7 +30,8 @@ class FreeListInterface(parameter: FreeListParameter) extends Bundle {
 @instantiable
 class FreeList(val parameter: FreeListParameter) extends Module with SerializableModule[FreeListParameter] {
 
-  @public val io = IO(new FreeListInterface(parameter))
+  @public
+  val io = IO(new FreeListInterface(parameter))
 
   val freeList = RegInit(VecInit(Seq.tabulate(parameter.pregNum)(i => i.U(parameter.pregSize.W))))
 
@@ -51,27 +53,4 @@ class FreeList(val parameter: FreeListParameter) extends Module with Serializabl
   }
 
   freeHeadPOH := freeHeadPOHVec(PopCount(io.allocateReq))
-
-}
-
-class CircularShift(data: UInt) {
-  private def helper(step: Int, isLeft: Boolean): UInt = {
-    if (step == 0) {
-      data
-    }
-    else {
-      val splitIndex = if (isLeft) {
-        data.getWidth - (step % data.getWidth)
-      } else {
-        step % data.getWidth
-      }
-      Cat(data(splitIndex - 1, 0), data(data.getWidth - 1, splitIndex))
-    }
-  }
-  def left(step: Int): UInt = helper(step, true)
-  def right(step: Int): UInt = helper(step, false)
-}
-
-object CircularShift {
-  def apply(data: UInt): CircularShift = new CircularShift(data)
 }

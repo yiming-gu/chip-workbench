@@ -3,6 +3,8 @@ package groom.rtl.frontend
 import chisel3._
 import chisel3.util._
 import org.chipsalliance.t1.rtl._
+import chisel3.experimental.hierarchy.{instantiable, public, Instance, Instantiate}
+import chisel3.experimental.{SerializableModule, SerializableModuleParameter}
 
 case class FetchBufferParameter(
   fetchWidth: Int,
@@ -10,7 +12,7 @@ case class FetchBufferParameter(
   paddrBits: Int,
   decodeWidth: Int,
   fetchBufferEntries: Int,
-) {
+) extends SerializableModuleParameter {
 
   // fetchWidth require 2^n
   val fetchPacketNum = fetchBufferEntries / decodeWidth
@@ -37,7 +39,9 @@ class FetchBufferInterface(parameter: FetchBufferParameter) extends Bundle {
   val deq = DecoupledIO(new FetchBufferResp(parameter))
 }
 
-class FetchBuffer(parameter: FetchBufferParameter) extends Module {
+@instantiable
+class FetchBuffer(val parameter: FetchBufferParameter) extends Module with SerializableModule[FetchBufferParameter] {
+  @public
   val io = IO(new FetchBufferInterface(parameter))
 
   val fetchBuffer = Reg(Vec(parameter.fetchBufferEntries, new FetchPacket(parameter)))
@@ -57,7 +61,7 @@ class FetchBuffer(parameter: FetchBufferParameter) extends Module {
 
   val inMask: Vec[Bool] = cutUInt(io.enq.bits.mask, 1).asTypeOf(Vec(parameter.fetchWidth, Bool()))
   val inUops: Vec[FetchPacket] = VecInit(io.enq.bits.inst.zipWithIndex.map {case (inst, index) =>
-    val fetchPacket = new FetchPacket(parameter)
+    val fetchPacket = Wire(new FetchPacket(parameter))
     fetchPacket.inst := inst
     fetchPacket.pc := io.enq.bits.pc(parameter.paddrBits-1, log2Ceil(parameter.fetchWidth)) ## index.asUInt(log2Ceil(parameter.fetchWidth).W)
     fetchPacket

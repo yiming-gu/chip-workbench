@@ -82,7 +82,7 @@ trait RVDecoderDB extends millbuild.dependencies.rvdecoderdb.common.RVDecoderDBJ
 object groom extends Groom
 
 trait Groom extends millbuild.common.GroomModule with ScalafmtModule {
-  override def millSourcePath = os.pwd / "src"
+  override def millSourcePath = os.pwd / "groomemu" / "src"
   def scalaVersion = T(v.scala)
 
   override def sources = T.sources {

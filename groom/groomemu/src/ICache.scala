@@ -46,18 +46,18 @@ case class ICacheParameter(
   )
 }
 
-class ICacheReq(vaddrBits: Int) extends Bundle {
-  val addr = UInt(vaddrBits.W)
+class ICacheReq(parameter: ICacheParameter) extends Bundle {
+  val addr = UInt(parameter.paddrBits.W)
 }
 
-class ICacheResp(paddrBits: Int, fetchBytes: Int) extends Bundle {
-  val pc   = UInt(paddrBits.W)
-  val data = UInt((fetchBytes*8).W)
+class ICacheResp(parameter: ICacheParameter) extends Bundle {
+  val pc   = UInt(parameter.paddrBits.W)
+  val data = UInt((parameter.fetchBytes*8).W)
 }
 
 class ICacheInterface(parameter: ICacheParameter) extends Bundle {
-  val req  = Flipped(Decoupled(new ICacheReq(parameter.paddrBits)))
-  val resp = Decoupled(new ICacheResp(parameter.paddrBits, parameter.fetchBytes))
+  val req  = Flipped(Decoupled(new ICacheReq(parameter)))
+  val resp = Decoupled(new ICacheResp(parameter))
 
   val s1Kill = Input(Bool())
   val s2Kill = Input(Bool())
@@ -66,7 +66,9 @@ class ICacheInterface(parameter: ICacheParameter) extends Bundle {
     org.chipsalliance.amba.axi4.bundle.AXI4ROIrrevocable(parameter.instructionFetchParameter)
 }
 
+@instantiable
 class ICache(val parameter: ICacheParameter) extends Module with SerializableModule[ICacheParameter] {
+  @public
   val io = IO(new ICacheInterface(parameter))
 
   val sNormal :: sFetchAr :: sFetchR :: sWb :: Nil = Enum(4)

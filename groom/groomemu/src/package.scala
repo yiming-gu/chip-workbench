@@ -384,5 +384,27 @@ package object rtl {
     val pcNext = pcAligned + 1.U
     pcNext ## 0.U(log2Ceil(fetchBytes).W)
   }
+
+  class CircularShift(data: UInt) {
+    private def helper(step: Int, isLeft: Boolean): UInt = {
+      if (step == 0) {
+        data
+      }
+      else {
+        val splitIndex = if (isLeft) {
+          data.getWidth - (step % data.getWidth)
+        } else {
+          step % data.getWidth
+        }
+        Cat(data(splitIndex - 1, 0), data(data.getWidth - 1, splitIndex))
+      }
+    }
+    def left(step: Int): UInt = helper(step, true)
+    def right(step: Int): UInt = helper(step, false)
+  }
+
+  object CircularShift {
+    def apply(data: UInt): CircularShift = new CircularShift(data)
+  }
 }
 

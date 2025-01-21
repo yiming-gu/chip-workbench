@@ -21,9 +21,9 @@ import chisel3.util.{
 import org.chipsalliance.rocketv.{Decoder, DecoderParameter}
 import org.chipsalliance.rocketv.rvdecoderdbcompat.Causes
 import org.chipsalliance.rvdecoderdb.Instruction
+import org.chipsalliance.rocketv.DecoderInterface
 import groom.rtl.frontend._
 import groom.rtl.backend._
-import org.chipsalliance.rocketv.DecoderInterface
 
 object GroomParameter {
   implicit def rwP: upickle.default.ReadWriter[GroomParameter] = upickle.default.macroRW[GroomParameter]
@@ -206,33 +206,35 @@ case class GroomParameter(
     xLen
   )
 
-  val icacheParameter: ICacheParameter = ICacheParameter(
+  val frontendParameter: FrontendParameter = FrontendParameter(
     fetchBytes = 16,
-    nSets      = 64,
-    nWays      = 8,
-    paddrBits  = 32,
+    instBytes = 4,
+    nSets = 64,
+    nWays = 8,
+    paddrBits = paddrBits,
     blockBytes = 64,
-    busBytes   = 4
+    busBytes = 4,
+    decodeWidth = 3,
+    fetchBufferEntries = 9,
   )
 
   val freelistParameter: FreeListParameter = FreeListParameter(
-    renameWidth = renameWidth,
-    pregNum = pregNum,
+    renameWidth,
+    pregNum,
   )
 }
 
 class GroomInterface(parameter: GroomParameter) extends Bundle {
-  val freelistIo = new FreeListInterface(parameter.freelistParameter)
+  val frontendIo = new FrontendInterface(parameter.frontendParameter)
   val decoderIo = new DecoderInterface(parameter.decoderParameter)
 }
 
 class Groom(val parameter: GroomParameter) extends Module with SerializableModule[GroomParameter] {
 
   val io = IO(new GroomInterface(parameter))
-  // val icache: Instance[ICache] = Instantiate(new ICache(parameter.icacheParameter))
-  val freelist: Instance[FreeList] = Instantiate(new FreeList(parameter.freelistParameter))
+  val frontend: Instance[Frontend] = Instantiate(new Frontend(parameter.frontendParameter))
   val decoder: Instance[Decoder] = Instantiate(new Decoder(parameter.decoderParameter))
 
-  freelist.io <> io.freelistIo
+  frontend.io <> io.frontendIo
   decoder.io <> io.decoderIo
 }
