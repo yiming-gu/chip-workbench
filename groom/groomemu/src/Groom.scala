@@ -226,15 +226,15 @@ case class GroomParameter(
 
 class GroomInterface(parameter: GroomParameter) extends Bundle {
   val frontendIo = new FrontendInterface(parameter.frontendParameter)
-  val decoderIo = new DecoderInterface(parameter.decoderParameter)
+  // val decoderIo = new DecoderInterface(parameter.decoderParameter)
 }
 
 class Groom(val parameter: GroomParameter) extends Module with SerializableModule[GroomParameter] {
 
   val io = IO(new GroomInterface(parameter))
   val frontend: Instance[Frontend] = Instantiate(new Frontend(parameter.frontendParameter))
-  val decoder: Instance[Decoder] = Instantiate(new Decoder(parameter.decoderParameter))
+  // val decoder: Instance[Decoder] = Instantiate(new Decoder(parameter.decoderParameter))
 
   frontend.io <> io.frontendIo
-  decoder.io <> io.decoderIo
+  // decoder.io <> io.decoderIo
 }

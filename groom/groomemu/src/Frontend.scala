@@ -43,9 +43,11 @@ case class FrontendParameter(
 }
 
 class FrontendInterface(parameter: FrontendParameter) extends Bundle {
+  val pc = Input(UInt(32.W))
   val fetchPacket = DecoupledIO(new FetchBufferResp(parameter.fetchBufferParameter))
   val instructionFetchAXI: AXI4ROIrrevocable =
     org.chipsalliance.amba.axi4.bundle.AXI4ROIrrevocable(parameter.iCacheParameter.instructionFetchParameter)
+  val iCacheFire = Output(Bool())
 }
 
 @instantiable
@@ -57,12 +59,13 @@ class Frontend(val parameter: FrontendParameter) extends Module with Serializabl
   val fetchBuffer: Instance[FetchBuffer] = Instantiate(new FetchBuffer(parameter.fetchBufferParameter))
 
   val snpc = Wire(UInt(32.W))
-  val pc = RegEnable(snpc, "h80000000".U(32.W), iCache.io.req.fire)
+  // val pc = RegEnable(snpc, "h80000000".U(32.W), iCache.io.req.fire)
+  val pc = io.pc
 
   snpc := NextPc(pc, parameter.fetchBytes, parameter.paddrBits)
 
   val dnpc = MuxCase(pc, Seq(
-
+    iCache.io.cacheMissJump -> iCache.io.cacheMissJumpPc,
   ))
 
   iCache.io.req.bits.addr := dnpc
@@ -80,4 +83,5 @@ class Frontend(val parameter: FrontendParameter) extends Module with Serializabl
 
   io.fetchPacket <> fetchBuffer.io.deq
   io.instructionFetchAXI <> iCache.io.instructionFetchAXI
+  io.iCacheFire := iCache.io.req.fire
 }
