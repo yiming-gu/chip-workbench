@@ -63,7 +63,7 @@ class FetchBuffer(val parameter: FetchBufferParameter) extends Module with Seria
   val inUops: Vec[FetchPacket] = VecInit(io.enq.bits.inst.zipWithIndex.map {case (inst, index) =>
     val fetchPacket = Wire(new FetchPacket(parameter))
     fetchPacket.inst := inst
-    fetchPacket.pc := io.enq.bits.pc(parameter.paddrBits-1, log2Ceil(parameter.fetchWidth)) ## index.asUInt(log2Ceil(parameter.fetchWidth).W)
+    fetchPacket.pc := io.enq.bits.pc(parameter.paddrBits-1, log2Ceil(parameter.fetchWidth)+2) ## index.asUInt(log2Ceil(parameter.fetchWidth).W) ## 0.U(2.W)
     fetchPacket
   })
 
@@ -76,7 +76,7 @@ class FetchBuffer(val parameter: FetchBufferParameter) extends Module with Seria
 
   for (i <- 0 until parameter.fetchWidth) {
     for (j <- 0 until parameter.fetchBufferEntries) {
-      when (inMask(i) && enqIdx1H(i)(j)) {
+      when (inMask(i) && enqIdx1H(i)(j) && io.enq.fire) {
         fetchBuffer(j) := inUops(i)
       }
     }
@@ -90,7 +90,7 @@ class FetchBuffer(val parameter: FetchBufferParameter) extends Module with Seria
   }
 
   val mayHitHead = (1 until parameter.fetchWidth).map { k =>
-    VecInit(rotateLeft(tail1H, k).asBools.zipWithIndex.filter { case (bit,idx) =>
+    VecInit(rotateLeft(tail1H, k).asBools.zipWithIndex.filter { case (bit, idx) =>
       idx % parameter.decodeWidth == 0
     }.map { case (bit, idx) => bit }).asUInt
   }.map { newTail => head1H & newTail }.reduce(_|_).orR
@@ -117,10 +117,11 @@ class FetchBuffer(val parameter: FetchBufferParameter) extends Module with Seria
   val deqValid = (~MaskUpper(slotWillHitTail)).asBools
 
   io.enq.ready := doEnqueue
-  io.deq.valid := deqValid.reduce(_||_)  // why !willHitTail  for little decodewidth output
+  io.deq.valid := deqValid.reduce(_&&_)  // why !willHitTail  for little decodewidth output
   io.deq.bits.uops.zip(deqValid).map { case (d, v) => d.valid := v }  // each output is valid?
   io.deq.bits.uops.zip(Mux1H(head1H, fetchBufferMatrix)).map { case (d, q) => d.bits := q }
 
+  // 指令有效就发送，还是一组指令都有效才发送？
   when (io.enq.fire) {
     tail1H := enqIdx
     mayFull := true.B
