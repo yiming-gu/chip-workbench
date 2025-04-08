@@ -5,7 +5,7 @@
 !/nexus-am/*
 !/nanos-lite/*
 !/navy-apps/*
-!/npc/*
+!/groom/*
 !Makefile
 !README.md
 !.gitignore
