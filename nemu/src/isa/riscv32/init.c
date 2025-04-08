@@ -38,6 +38,8 @@ void init_isa() {
   /* Load built-in image. */
   memcpy(guest_to_host(RESET_VECTOR), img, sizeof(img));
 
+  pattern_info_init();
+
   /* Initialize this virtual computer system. */
   restart();
 }

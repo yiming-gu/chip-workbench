@@ -26,6 +26,12 @@ typedef struct Decode {
   IFDEF(CONFIG_ITRACE, char logbuf[128]);
 } Decode;
 
+typedef struct PatternInfo {
+  uint64_t key;
+  uint64_t mask;
+  uint64_t shift;
+} PatternInfo;
+
 // --- pattern matching mechanism ---
 __attribute__((always_inline))
 static inline void pattern_decode(const char *str, int len,
@@ -85,12 +91,14 @@ finish:
   *shift = __shift;
 }
 
+#define PATTERN_INFO(pattern, no, inst) \
+  pattern_decode(pattern, STRLEN(pattern), &pattern_info[no].key, &pattern_info[no].mask, &pattern_info[no].shift);
 
 // --- pattern matching wrappers for decode ---
-#define INSTPAT(pattern, ...) do { \
-  uint64_t key, mask, shift; \
-  pattern_decode(pattern, STRLEN(pattern), &key, &mask, &shift); \
-  if ((((uint64_t)INSTPAT_INST(s) >> shift) & mask) == key) { \
+#define INSTPAT(pattern, no, ...) do { \
+  /*uint64_t key, mask, shift; \
+  pattern_decode(pattern, STRLEN(pattern), &key, &mask, &shift); */\
+  if ((((uint64_t)INSTPAT_INST(s) >> pattern_info[no].shift) & pattern_info[no].mask) == pattern_info[no].key) { \
     INSTPAT_MATCH(s, ##__VA_ARGS__); \
     goto *(__instpat_end); \
   } \
