@@ -28,6 +28,8 @@ class DispatchInterface(parameter: DispatchParameter) extends Bundle {
   val intIqRdy = Input(Vec(parameter.dispatchWidth, Bool()))
   // val memIqVld = Output(Vec(parameter.dispatchWidth, Bool()))
   // val memIqRdy = Input(Vec(parameter.dispatchWidth, Bool()))
+  val robVld = Output(Bool())
+  val robRdy = Input(Bool())
 }
 
 @instantiable
@@ -36,15 +38,21 @@ class Dispatch(val parameter: DispatchParameter) extends Module with Serializabl
   @public
   val io = IO(new DispatchInterface(parameter))
 
-  io.renameVld.bits.zipWithIndex.foreach { case (rvld, i) =>
-    io.intIqVld(i) := !rvld.instType && io.renameVld.valid
-    // io.memIqVld(i) := rvld.instType && io.renameVld.valid
-  }
+  val intIqVld = io.renameVld.bits.map(!_.instType && io.renameVld.valid)
+  val intIqVldNum = PopCount(intIqVld)
+  val intIqVldNumOH = Seq.tabulate(parameter.dispatchWidth)(i => (i+1).U===intIqVldNum)
+  val intIqMatch = intIqVldNumOH.zip(io.intIqRdy).map { case (vld, rdy) => vld && rdy }.reduce(_||_)
 
-  val intIqFire = VecInit(io.intIqVld.zip(io.intIqRdy).map { case (vld, rdy) => vld && rdy })
+  io.intIqVld := intIqVld.map(_ && intIqMatch && io.robRdy)
+
+  // io.renameVld.bits.zipWithIndex.foreach { case (rvld, i) =>
+  //   io.intIqVld(i) := intIqVld
+  //   // io.memIqVld(i) := rvld.instType && io.renameVld.valid
+  // }
+
   // val memIqFire = VecInit(io.memIqVld.zip(io.memIqRdy).map { case (vld, rdy) => vld && rdy })
 
   // io.renameVld.ready := (intIqFire.asUInt | memIqFire.asUInt).andR
-  io.renameVld.ready := intIqFire.asUInt.andR
-
+  io.renameVld.ready := intIqMatch && io.robRdy
+  io.robVld := io.renameVld.fire
 }

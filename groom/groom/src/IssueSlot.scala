@@ -15,19 +15,21 @@ class IssueSlotInterface(parameter: IssueParameter) extends Bundle {
     parameter.pregSize,
     parameter.robSize
   )))
+  val inSelIssuePort = Input(Vec(parameter.issueWidth, Bool()))
   val outUop = Output(new MicroOp(
     parameter.paddrBits,
     parameter.decoderParameter,
     parameter.pregSize,
     parameter.robSize
   ))
+  val outSelIssuePort = Output(Vec(parameter.issueWidth, Bool()))
   val issueUop = Output(new MicroOp(
     parameter.paddrBits,
     parameter.decoderParameter,
     parameter.pregSize,
     parameter.robSize
   ))
-  val request = Output(Bool())
+  val request = Output(Vec(parameter.issueWidth, Bool()))
   val stillBeValid = Output(Bool())
   val grant = Input(Bool())
   val clear = Input(Bool())
@@ -46,10 +48,14 @@ class IssueSlot(val parameter: IssueParameter) extends Module with SerializableM
     parameter.pregSize,
     parameter.robSize
   ))
+  val selIssuePort = Reg(Vec(parameter.issueWidth, Bool()))
   val nextUop = WireInit(uop)
 
   when (io.inUop.valid) {
     valid := true.B
+  }
+  .elsewhen (io.grant) {
+    valid := false.B
   }
   .elsewhen (io.clear) {
     valid := false.B
@@ -57,9 +63,11 @@ class IssueSlot(val parameter: IssueParameter) extends Module with SerializableM
 
   when (io.inUop.valid) {
     uop := io.inUop.bits
+    selIssuePort := io.inSelIssuePort
   }
   .otherwise {
     uop := nextUop
+    selIssuePort := selIssuePort
   }
 
   val psrc0Ready = RegInit(false.B)
@@ -73,14 +81,14 @@ class IssueSlot(val parameter: IssueParameter) extends Module with SerializableM
     w.valid && w.bits.pdst === uopMux.preg.psrc(1)
   }.reduce(_ || _)
 
-  when (isPsrc0WakeUp) {
+  when (isPsrc0WakeUp && (valid || io.inUop.valid)) {
     psrc0Ready := true.B
   }
   .elsewhen (io.inUop.valid) {
     psrc0Ready := !io.inUop.bits.preg.psrcBusy(0)
   }
 
-  when (isPsrc1WakeUp) {
+  when (isPsrc1WakeUp && (valid || io.inUop.valid)) {
     psrc1Ready := true.B
   }
   .elsewhen (io.inUop.valid) {
@@ -93,6 +101,9 @@ class IssueSlot(val parameter: IssueParameter) extends Module with SerializableM
   io.valid := valid
   io.outUop := nextUop
   io.issueUop := uop
-  io.request := valid && psrc0Ready && psrc1Ready
   io.stillBeValid := valid && !io.grant
+  io.outSelIssuePort := selIssuePort
+  io.request.zip(selIssuePort).foreach { case (req, sel) =>
+    req := valid && psrc0Ready && psrc1Ready && sel
+  }
 }

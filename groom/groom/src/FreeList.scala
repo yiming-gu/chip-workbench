@@ -27,6 +27,7 @@ class FreeListInterface(parameter: FreeListParameter) extends Bundle {
 
   val freeReq = Input(Vec(parameter.commitWidth, Bool()))
   val freePhyReg = Input(Vec(parameter.commitWidth, UInt(parameter.pregSize.W)))
+  val freeWillEmpty = Output(Bool())
 }
 
 @instantiable
@@ -40,18 +41,14 @@ class FreeList(val parameter: FreeListParameter) extends Module with Serializabl
   val freeHeadPOH = RegInit(1.U(parameter.pregNum.W))
   val freeTailPOH = RegInit(1.U(parameter.pregNum.W))
 
-  // val freeHeadP = RegInit(0.U(parameter.pregSize.W))
-  // val freeTailP = RegInit(0.U(parameter.pregSize.W))
-
-  // freeHeadP := Mux(io.redirect, io.headPRedirect, freeHeadP + PopCount(io.allocateReq))
-  // freeTailP := freeTailP + PopCount(io.freeReq)
-
   val freeTailPOHShift = CircularShift(freeTailPOH)
   val freeTailPOHVec = VecInit.tabulate(parameter.commitWidth + 1)(freeTailPOHShift.left)
   val freeTailPVec = VecInit(freeTailPOHVec.map(OHToUInt(_)))
 
   for (i <- 0 until parameter.commitWidth) {
-    freeList(freeTailPVec(PopCount(io.freeReq.take(i)))) := io.freePhyReg(i)
+    when (io.freeReq(i)) {
+      freeList(freeTailPVec(PopCount(io.freeReq.take(i)))) := io.freePhyReg(i)
+    }
   }
 
   freeTailPOH := freeTailPOHVec(PopCount(io.freeReq))
@@ -64,5 +61,7 @@ class FreeList(val parameter: FreeListParameter) extends Module with Serializabl
     io.allocatePhyReg(i) := phyRegCandidates(PopCount(io.allocateReq.take(i)))
   }
 
-  freeHeadPOH := freeHeadPOHVec(PopCount(io.allocateReq))
+  freeHeadPOH := Mux(io.redirect, freeTailPOH, freeHeadPOHVec(PopCount(io.allocateReq)))
+
+  io.freeWillEmpty := freeHeadPOHVec.drop(1).map(p => p === freeTailPOH).reduce(_ || _)
 }

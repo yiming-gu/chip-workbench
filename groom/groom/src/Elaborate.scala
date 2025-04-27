@@ -1,4 +1,5 @@
 import groom._
+import spire.std.int
 
 object Elaborate extends App {
   val firtoolOptions = Array(
@@ -24,6 +25,10 @@ object Elaborate extends App {
     pregNum = 128,
     instBytes = 4,
     robNum = 32,
+    commitWidth = 3,
+    intIssueWidth = 3,
+    wakeUpWidth = 3,
+    writeBackWidth = 3,
   )
 
   // FreeListMain.config(FreeListMain.FreeListParameterMain(3, 128))

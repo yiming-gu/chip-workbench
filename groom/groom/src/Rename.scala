@@ -58,10 +58,11 @@ class RenameInterface(parameter: RenameParameter) extends Bundle {
   val renamePreg = DecoupledIO(Vec(parameter.renameWidth, new RenamePreg(parameter.pregSize)))
 
   val wakeUpReq = Vec(parameter.wakeUpWidth, Flipped(ValidIO(new WakeUpReq(parameter.pregNum, parameter.delaySize))))
-  val commit = Vec(parameter.commitWidth, Flipped(ValidIO(new RobCommit(
+  val commit = Input(new RobCommit(
+    parameter.commitWidth,
     parameter.lregSize,
     parameter.pregSize
-  ))))
+  ))
 }
 
 @instantiable
@@ -70,9 +71,10 @@ class Rename(val parameter: RenameParameter) extends Module with SerializableMod
   @public
   val io = IO(new RenameInterface(parameter))
 
+  val freeWillEmpty = Wire(Bool())
   val renameVld = RegEnable(io.decodeLreg.valid, false.B, io.decodeLreg.ready)
-  io.decodeLreg.ready := !renameVld || io.renamePreg.ready
-  io.renamePreg.valid := renameVld
+  io.decodeLreg.ready := !renameVld || io.renamePreg.fire
+  io.renamePreg.valid := renameVld && !freeWillEmpty
 
   val preg = Wire(Vec(parameter.renameWidth, new RenamePreg(parameter.pregSize)))
   val renameTable = Module(new RenameTable(parameter.renameTableParameter))
@@ -93,36 +95,39 @@ class Rename(val parameter: RenameParameter) extends Module with SerializableMod
     bpreg.psrc(1) := preg.psrc(1)
     bpreg.pdst := preg.pdst
   }
-  busyTable.io.busyReq := io.decodeLreg.bits.map(_.ldstValid)
+  busyTable.io.busyReq := io.decodeLreg.bits.map(_.ldstValid && io.renamePreg.fire)
   busyTable.io.wakeUpReq := io.wakeUpReq
+  busyTable.io.redirect := io.redirect
 
   preg.zip(busyTable.io.psrcBusy).zip(io.decodeLreg.bits).map { case ((preg, busy), lvld) =>
     preg.psrcBusy(0) := busy(0) && lvld.lsrcValid(0)
     preg.psrcBusy(1) := busy(1) && lvld.lsrcValid(1)
   }
 
-  freeList.io.allocateReq := io.decodeLreg.bits.map(_.ldstValid)
-  freeList.io.freeReq := io.commit.map(c => c.valid && c.bits.wxd)
+  freeList.io.allocateReq := io.decodeLreg.bits.map(_.ldstValid && io.renamePreg.fire)
+  freeList.io.freeReq := io.commit.commitValid.zip(io.commit.wxd).map(c => c._1 && c._2)
   freeList.io.freePhyReg := renameTable.io.oldPdest
-  freeList.io.redirect := false.B
+  freeList.io.redirect := io.redirect
+  freeWillEmpty := freeList.io.freeWillEmpty
   preg.zip(freeList.io.allocatePhyReg).map { case (preg, apreg) => preg.pdst := apreg }
 
   val bypassCond: Vec[MixedVec[UInt]] = Wire(Vec(2 + 1, MixedVec(List.tabulate(parameter.renameWidth-1)(i => UInt((i+1).W)))))
   renameTable.io.specTableWrite.zip(io.decodeLreg.bits).zip(preg).zipWithIndex.map { case (((table, lreg), preg), i) =>
-    if (i == parameter.renameWidth-1) {
-      table.wen := lreg.ldstValid
-    }
-    else {
-      table.wen := !(bypassCond(2).takeRight(parameter.renameWidth-1-i).reduce(_(i)||_(i))) && lreg.ldstValid
-    }
+    // if (i == parameter.renameWidth-1) {
+    //   table.wen := lreg.ldstValid && io.renamePreg.fire
+    // }
+    // else {
+    //   table.wen := !(bypassCond(2).takeRight(parameter.renameWidth-1-i).reduce(_(i)||_(i))) && lreg.ldstValid && io.renamePreg.fire
+    // }
+    table.wen := lreg.ldstValid && io.renamePreg.fire
     table.addr := lreg.ldst
     table.data := preg.pdst
   }
 
-  renameTable.io.archTableWrite.zip(io.commit).map { case (table, c) =>
-    table.wen := c.valid && c.bits.wxd
-    table.addr := c.bits.ldst
-    table.data := c.bits.pdst
+  for (i <- 0 until parameter.commitWidth) {
+    renameTable.io.archTableWrite(i).wen := io.commit.commitValid(i) && io.commit.wxd(i)
+    renameTable.io.archTableWrite(i).addr := io.commit.ldst(i)
+    renameTable.io.archTableWrite(i).data := io.commit.pdst(i)
   }
 
   for (i <- 1 until parameter.renameWidth) {

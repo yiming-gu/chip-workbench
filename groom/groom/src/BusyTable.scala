@@ -25,6 +25,7 @@ class Preg(parameter: BusyTableParameter) extends Bundle {
 }
 
 class BusyTableInterface(parameter: BusyTableParameter) extends Bundle {
+  val redirect = Input(Bool())
   val preg = Input(Vec(parameter.renameWidth, new Preg(parameter)))
   val busyReq = Input(Vec(parameter.renameWidth, Bool()))
   val psrcBusy = Output(Vec(parameter.renameWidth, Vec(2, Bool())))
@@ -50,7 +51,7 @@ class BusyTable(val parameter: BusyTableParameter) extends Module with Serializa
       req.asUInt << preg.pdst
     }.reduce(_|_)
 
-  busyTable := busyTableNext
+  busyTable := Mux(io.redirect, 0.U, busyTableNext)
 
   io.psrcBusy.zip(io.preg).map { case (busy, preg) =>
     busy(0) := busyTable(preg.psrc(0))

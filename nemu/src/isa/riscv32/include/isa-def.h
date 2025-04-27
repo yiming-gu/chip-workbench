@@ -30,6 +30,4 @@ typedef struct {
 
 #define isa_mmu_check(vaddr, len, type) (MMU_DIRECT)
 
-void pattern_info_init();
-
 #endif

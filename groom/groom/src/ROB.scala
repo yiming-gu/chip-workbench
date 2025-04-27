@@ -13,14 +13,14 @@ object ROBParameter {
 }
 
 case class ROBParameter(
+  xLen: Int,
   dispatchWidth: Int,
   commitWidth: Int,
   robNum: Int,
   paddrBits: Int,
   lregNum: Int,
   pregNum: Int,
-  renameWidth: Int,
-  writebackWidth: Int,
+  writeBackWidth: Int,
   decoderParameter: DecoderParameter,
 ) extends SerializableModuleParameter {
   val robSize = log2Ceil(robNum)
@@ -29,80 +29,151 @@ case class ROBParameter(
 }
 
 class ROBInterface(parameter: ROBParameter) extends Bundle {
+  val reset = Input(Bool())
   // enq
-  val enq = Vec(parameter.renameWidth, Flipped(ValidIO(new MicroOp(
+  val enq = Flipped(DecoupledIO(Vec(parameter.dispatchWidth, new MicroOp(
     parameter.paddrBits,
     parameter.decoderParameter,
     parameter.pregSize,
     parameter.robSize
   ))))
-  val robIdx = Vec(parameter.renameWidth, Output(UInt(parameter.robSize.W)))
+  val robIdx = Vec(parameter.dispatchWidth, Output(UInt(parameter.robSize.W)))
   // writeback
-  val wb = Vec(parameter.writebackWidth, Flipped(ValidIO(UInt(parameter.robSize.W))))
+  val wb = Vec(parameter.writeBackWidth, Flipped(ValidIO(UInt(parameter.robSize.W))))
   // commit
-  val commit = Vec(parameter.commitWidth, ValidIO(new RobCommit(
+  val commit = Output(new RobCommit(
+    parameter.commitWidth,
     parameter.lregSize,
     parameter.pregSize
-  )))
+  ))
+  val flush = ValidIO(new Redirect(parameter.xLen))
 }
 
 @instantiable
-class ROB(val parameter: ROBParameter) extends Module with SerializableModule[ROBParameter] {
+class ROB(val parameter: ROBParameter)
+    extends Module
+    with SerializableModule[ROBParameter]
+    with ImplicitReset {
+
+  override protected def implicitReset: Reset = io.reset
 
   @public
   val io = IO(new ROBInterface(parameter))
 
-  val robValid     = RegInit(VecInit.fill(parameter.robNum)(false.B))
-  val robComplete  = Reg(Vec(parameter.robNum, Bool()))
-  // val robException = Reg(Vec(parameter.robNum, Bool()))
-  val robUop       = Reg(Vec(parameter.robNum, new MicroOp(
-    parameter.paddrBits,
-    parameter.decoderParameter,
-    parameter.pregSize,
-    parameter.robSize
-  )))
+  val robEntries = Reg(Vec(parameter.robNum, new RobEntry(parameter.lregSize, parameter.pregSize, parameter.xLen)))
 
-  val robHeadPOH = RegInit(1.U(parameter.robNum.W))
-  val robTailPOH = RegInit(1.U(parameter.robNum.W))
+  // val robBanks = VecInit((0 until parameter.commitWidth).map(i => VecInit(robEntries.zipWithIndex.filter(_._2 % parameter.commitWidth == i).map(_._1))))
 
-  val enqValid = io.enq.map(_.valid)
+  val robDeqPOH = RegInit(1.U(parameter.robNum.W))
+  val robDeqFlag = RegInit(false.B)
+  val robEnqPOH = RegInit(1.U(parameter.robNum.W))
+  val robEnqFlag = RegInit(false.B)
 
-  val robHeadPOHShift = CircularShift(robHeadPOH)
-  val robHeadPOHVec = VecInit.tabulate(parameter.renameWidth + 1)(robHeadPOHShift.left)
-  val robHeadPVec = VecInit(robHeadPOHVec.map(OHToUInt(_)))
+  val robEnqPOHShift = CircularShift(robEnqPOH)
+  val robEnqPOHVec = VecInit.tabulate(parameter.dispatchWidth)(robEnqPOHShift.left)
+  val robEnqPVec = VecInit(robEnqPOHVec.map(OHToUInt(_)))
 
-  for (i <- 0 until parameter.renameWidth) {
-    robValid(robHeadPVec(PopCount(enqValid.take(i)))) := true.B
-    robComplete(robHeadPVec(PopCount(enqValid.take(i)))) := false.B
-    robUop(robHeadPVec(PopCount(enqValid.take(i)))) := io.enq(i).bits
+  val flush = Wire(Bool())
+
+  when (io.reset.asBool) {
+    for (i <- 0 until parameter.robNum) {
+      robEntries(i).valid := false.B
+      robEntries(i).writebacked := false.B
+      robEntries(i).needFlush := false.B
+    }
+  }
+  .elsewhen (flush) {
+    for (i <- 0 until parameter.robNum) {
+      robEntries(i).valid := false.B
+      robEntries(i).writebacked := false.B
+      robEntries(i).needFlush := false.B
+    }
+  }
+
+  when (io.enq.fire) {
+    for (i <- 0 until parameter.dispatchWidth) {
+      val idx = robEnqPVec(i)
+      robConnectEnq(robEntries(idx), io.enq.bits(i), parameter.decoderParameter)
+    }
   }
 
   io.wb.foreach { wb =>
     when (wb.valid) {
-      robComplete(wb.bits) := true.B
+      robEntries(wb.bits).writebacked := true.B
     }
   }
 
-  robHeadPOH := robHeadPOHVec(PopCount(enqValid))
-  for (i <- 0 until parameter.renameWidth) {
-    io.robIdx(i) := robHeadPVec(PopCount(enqValid.take(i)))
+  val robEnqPOHNext = robEnqPOHShift.left(parameter.dispatchWidth)
+  when (io.enq.fire) {
+    robEnqPOH := robEnqPOHNext
+    when (robEnqPOH(parameter.robNum - 1,
+                  parameter.robNum - parameter.dispatchWidth).orR &&
+          robEnqPOHNext(parameter.dispatchWidth - 1, 0).orR) {
+      robEnqFlag := !robEnqFlag
+    }
+  }
+  .elsewhen (flush) {
+    robEnqPOH := 1.U
+    robEnqFlag := false.B
   }
 
-  val robTailPOHShift = CircularShift(robTailPOH)
-  val robTailPOHVec = VecInit.tabulate(parameter.commitWidth + 1)(robTailPOHShift.left)
+  val robDeqPOHShift = CircularShift(robDeqPOH)
+  val robDeqPOHVec = VecInit.tabulate(parameter.commitWidth)(robDeqPOHShift.left)
 
-  val complete = VecInit(robTailPOHVec.map(sel => Mux1H(sel, robComplete)))
-  val uop      = VecInit(robTailPOHVec.map(sel => Mux1H(sel, robUop)))
-  val commitValid = complete.reduce(_ && _)
+  val commitCandidates = VecInit(robDeqPOHVec.map(sel => Mux1H(sel, robEntries)))
+  val commitPOH = RegInit(1.U(parameter.commitWidth.W))
+  val commitPOHShift = CircularShift(commitPOH)
+  val commitPOHVec = VecInit.tabulate(parameter.commitWidth)(commitPOHShift.left)
 
-  when (commitValid) {
-    robTailPOH := robTailPOHVec(PopCount(complete))
+  val hasCommitted = RegInit(VecInit.fill(parameter.commitWidth)(false.B))
+  val commitValid = VecInit(Seq.tabulate(parameter.commitWidth)(i => commitCandidates.map(c => c.valid && c.writebacked).take(i+1).reduce(_ && _)).zip(hasCommitted).map(c => c._1 && !c._2))
+  val allCommitted = io.commit.isCommit && io.commit.commitValid.last
+  val allowOnlyOneCommit = VecInit(commitCandidates.map(x => x.valid && x.writebacked && x.needFlush)).asUInt.orR
+
+  when (allCommitted) {
+    hasCommitted := 0.U.asTypeOf(hasCommitted)
+  }
+  .elsewhen (io.commit.isCommit) {
+    for (i <- 0 until parameter.commitWidth) {
+      hasCommitted(i) := commitValid(i) || hasCommitted(i)
+    }
   }
 
-  io.commit.zip(uop).foreach { case (c, u) =>
-    c.valid := commitValid
-    c.bits.wxd := u.uop(parameter.decoderParameter.wxd)
-    c.bits.ldst := u.fetchPacket.inst(11, 7)
-    c.bits.pdst := u.preg.pdst
+  when (allCommitted) {
+    commitPOH := 1.U
   }
+  .otherwise {
+    commitPOH := commitPOHVec(PopCount(io.commit.commitValid))
+  }
+
+  flush := commitCandidates(OHToUInt(commitPOH)).needFlush
+
+  val robDeqPOHNext = robDeqPOHShift.left(parameter.commitWidth)
+  when (allCommitted) {
+    robDeqPOH := robDeqPOHNext
+    when (robDeqPOH(parameter.robNum - 1,
+                    parameter.robNum - parameter.commitWidth).orR &&
+          robDeqPOHNext(parameter.commitWidth - 1, 0).orR) {
+      robDeqFlag := !robDeqFlag
+    }
+  }
+  .elsewhen (flush) {
+    robDeqPOH := 1.U
+    robDeqFlag := false.B
+  }
+
+  val empty = robEnqPOH === robDeqPOH && robEnqFlag === robDeqFlag
+  io.robIdx := robEnqPVec
+  io.commit.isCommit := true.B
+  io.commit.commitValid := Mux(allowOnlyOneCommit, VecInit(commitPOH.asBools.zip(commitValid).map(c => c._1 && c._2)), commitValid).map(_ && !empty)
+  io.commit.isWalk := false.B
+  io.commit.walkValid := Seq.fill(parameter.commitWidth)(false.B)
+  io.commit.wxd := commitCandidates.map(_.wxd)
+  io.commit.ldst := commitCandidates.map(_.ldst)
+  io.commit.pdst := commitCandidates.map(_.pdst)
+
+  val willFull = robEnqPOHVec.drop(1).map(p => p === robDeqPOH).reduce(_ || _)
+  io.enq.ready := !willFull
+  io.flush.valid := flush
+  io.flush.bits.pc := commitCandidates(OHToUInt(commitPOH)).pc
 }

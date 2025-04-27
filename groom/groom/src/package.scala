@@ -7,6 +7,8 @@ import chisel3._
 import chisel3.experimental.hierarchy.{Instance, Instantiate}
 import chisel3.util._
 import chisel3.util.experimental.decode.DecodeBundle
+import org.chipsalliance.rocketv.DecoderParameter
+import groom._
 // import cats.instances.int
 // import org.chipsalliance.t1.rtl.decoder.{Decoder, TableGenerator}
 // import org.chipsalliance.t1.rtl.lane.Distributor
@@ -405,6 +407,21 @@ package object rtl {
 
   object CircularShift {
     def apply(data: UInt): CircularShift = new CircularShift(data)
+  }
+
+  def robConnectEnq(robEntry: RobEntry, robEnq: MicroOp, parameter: DecoderParameter): Unit = {
+    robEntry.valid := true.B
+    robEntry.pc := robEnq.fetchPacket.pc
+    robEntry.wxd := robEnq.uop(parameter.wxd)
+    robEntry.ldst := robEnq.fetchPacket.inst(11, 7)
+    robEntry.pdst := robEnq.preg.pdst
+    robEntry.writebacked := false.B
+  }
+
+  def robConnectCommit(robCommit: RobCommit, robEntry: RobEntry): Unit = {
+    robCommit.wxd := robEntry.wxd
+    robCommit.ldst := robEntry.ldst
+    robCommit.pdst := robEntry.pdst
   }
 }
 

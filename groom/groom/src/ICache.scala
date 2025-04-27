@@ -74,14 +74,15 @@ class ICache(val parameter: ICacheParameter) extends Module with SerializableMod
   @public
   val io = IO(new ICacheInterface(parameter))
 
-  val sNormal :: sFetchAr :: sFetchR :: sWb :: Nil = Enum(4)
+  val sNormal :: sFetchAr :: sFetchR :: Nil = Enum(3)
   val iCacheState = RegInit(sNormal)
 
   val s0Idx = io.req.bits.addr(parameter.untagBits-1, parameter.blockOffBits)
 
+  val s1s2Ready: Bool = Wire(Bool())
   val s1Addr: UInt = RegEnable(io.req.bits.addr, 0.U, io.req.fire)
-  val s1ValidNoKill: Bool = RegEnable(Mux(io.s1Kill, false.B, io.req.valid), false.B, io.req.ready | io.s1Kill)
-  val s1Valid: Bool = !io.s1Kill && s1ValidNoKill && iCacheState === sNormal
+  val s1ValidNoKill: Bool = RegEnable(Mux(io.s1Kill || (!io.req.ready && s1s2Ready), false.B, io.req.valid), false.B, io.req.ready | io.s1Kill | (!io.req.ready && s1s2Ready))
+  val s1Valid: Bool = !io.s1Kill && s1ValidNoKill
   val s1Tag  = s1Addr(parameter.paddrBits-1, parameter.untagBits)
   val s1Idx  = s1Addr(parameter.untagBits-1, parameter.blockOffBits)
   val s1FetchIdx = s1Addr(parameter.blockOffBits-1, log2Ceil(parameter.fetchBytes))
@@ -93,16 +94,17 @@ class ICache(val parameter: ICacheParameter) extends Module with SerializableMod
     0.U((parameter.nSets * parameter.nWays).W),
     validArrayEn
   )
-  val tagArray   = SyncReadMem(
+  val tagArray   = Mem(
     parameter.nSets,
     Vec(parameter.nWays, UInt(parameter.tagBits.W))
   )
-  val dataArray  = SyncReadMem(
+  val dataArray  = Mem(
     parameter.nSets * parameter.nWays * (parameter.blockBytes/parameter.fetchBytes),
     UInt((parameter.fetchBytes*8).W)
   )
+  val tagReadData: Vec[UInt] = RegEnable(tagArray.read(s0Idx), VecInit.fill(parameter.nWays)(0.U(parameter.tagBits.W)), io.req.fire)
 
-  val tagReadData: Vec[UInt] = tagArray.read(s0Idx)
+  // val tagReadData: Vec[UInt] = tagArray.read(s0Idx, io.req.fire)
   val s1TagHit: UInt = VecInit(tagReadData.zipWithIndex.map { case (tag, index) =>
     val s1ValidBit = validArray(s1Idx ## index.U(log2Ceil(parameter.nWays).W))
     s1ValidBit && tag === s1Tag
@@ -111,10 +113,7 @@ class ICache(val parameter: ICacheParameter) extends Module with SerializableMod
   val s1Hit: Bool = s1TagHit.orR
   val s1HitWayNum: UInt = OHToUInt(s1TagHit)
   val s1s2Valid: Bool = s1Valid
-  val s1s2Ready: Bool = Wire(Bool())
   val s1s2Fire: Bool = s1s2Valid && s1s2Ready
-
-  val data = dataArray.read(s1Idx ## s1HitWayNum ## s1FetchIdx)
 
   val s2ValidNoKill: Bool = RegEnable(Mux(io.s2Kill, false.B, s1Valid), false.B, s1s2Ready | io.s2Kill)
   val s2Valid: Bool = !io.s2Kill && s2ValidNoKill
@@ -122,7 +121,10 @@ class ICache(val parameter: ICacheParameter) extends Module with SerializableMod
   val s2HitWayNum: UInt = RegEnable(s1HitWayNum, 0.U, s1s2Fire)
   val s2Addr: UInt = RegEnable(s1Addr, 0.U, s1s2Fire)
 
-  s1s2Ready := ~s2Valid | io.resp.ready
+  val data: UInt = RegEnable(dataArray.read(s1Idx ## s1HitWayNum ## s1FetchIdx), 0.U, s1s2Fire)
+  // val data: UInt = dataArray.read(s1Idx ## s1HitWayNum ## s1FetchIdx, s1s2Fire)
+
+  s1s2Ready := !s2Valid || io.resp.ready
 
   val refillIdx = s2Addr(parameter.untagBits-1, parameter.blockOffBits)
   val refillTag = s2Addr(parameter.paddrBits-1, parameter.untagBits)
@@ -132,10 +134,10 @@ class ICache(val parameter: ICacheParameter) extends Module with SerializableMod
   val refillWriteCntNext = Wire(UInt(log2Ceil(parameter.fetchBytes/parameter.busBytes).W))
   val refillCntNext = Wire(UInt(log2Ceil(parameter.blockBytes/parameter.fetchBytes).W))
   val refillBuf = RegEnable(refillData, 0.U, refillBufWriteEn)
-  val refillWriteCnt = RegEnable(refillWriteCntNext, 0.U, refillBufWriteEn)
-  val refillWriteEn = RegNext(refillBufWriteEn) && refillWriteCnt === 0.U
+  val refillWriteCnt = RegEnable(refillWriteCntNext, 0.U, RegNext(refillBufWriteEn && !io.instructionFetchAXI.r.bits.last))
+  val refillWriteEn = refillWriteCnt === 3.U
   val refillCnt = RegEnable(refillCntNext, 0.U, refillWriteEn)
-  val refillLast = io.instructionFetchAXI.r.valid && io.instructionFetchAXI.r.bits.last
+  val refillLast = io.instructionFetchAXI.r.bits.last
   refillData := io.instructionFetchAXI.r.bits.data ## refillBuf(parameter.fetchBytes*8-1, parameter.busBytes*8)
   refillWriteCntNext := refillWriteCnt + 1.U
   refillCntNext := refillCnt + 1.U
@@ -154,16 +156,13 @@ class ICache(val parameter: ICacheParameter) extends Module with SerializableMod
   validArrayNext := validArray.bitSet(refillIdx ## replWay, true.B)
 
   when (iCacheState === sNormal) {
-    iCacheState := Mux(s1Valid && !s1Hit, sFetchAr, sNormal)
+    iCacheState := Mux(s1s2Fire && !s1Hit, sFetchAr, sNormal)
   }
   .elsewhen (iCacheState === sFetchAr) {
     iCacheState := Mux(io.instructionFetchAXI.ar.fire, sFetchR, sFetchAr)
   }
   .elsewhen (iCacheState === sFetchR) {
-    iCacheState := Mux(refillLast, sWb, sFetchR)
-  }
-  .elsewhen (iCacheState === sWb) {
-    iCacheState := sNormal
+    iCacheState := Mux(refillLast, sNormal, sFetchR)
   }
   .otherwise {
     iCacheState := iCacheState
@@ -178,10 +177,10 @@ class ICache(val parameter: ICacheParameter) extends Module with SerializableMod
   io.instructionFetchAXI.ar.bits.burst := 1.U
   io.instructionFetchAXI.r.ready := iCacheState === sFetchR
 
-  io.req.ready := iCacheState === sNormal && (!s1Valid || s1Hit)
+  io.req.ready := (iCacheState === sNormal && (!s1Valid || s1Hit)) && s1s2Ready
   io.resp.valid := s2Valid && s2Hit
   io.resp.bits.data := data
   io.resp.bits.pc := s2Addr
-  io.cacheMissJump := iCacheState =/= sNormal
+  io.cacheMissJump := RegNext(refillLast)
   io.cacheMissJumpPc := s2Addr
 }

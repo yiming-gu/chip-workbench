@@ -14,6 +14,7 @@ import chisel3.util.{
   DecoupledIO,
   Fill,
   MuxLookup,
+  Mux1H,
   PriorityEncoder,
   PriorityMux,
   Queue,
@@ -28,6 +29,7 @@ import org.chipsalliance.amba.axi4.bundle.{AXI4BundleParameter, AXI4ROIrrevocabl
 import groom.rtl.frontend._
 import groom.rtl.backend._
 import spire.std.int
+import org.chipsalliance.rocketv.ImmGen
 
 object GroomParameter {
   implicit def rwP: upickle.default.ReadWriter[GroomParameter] = upickle.default.macroRW[GroomParameter]
@@ -53,6 +55,10 @@ case class GroomParameter(
   pregNum:                Int,
   instBytes:              Int,
   robNum:                 Int,
+  commitWidth:            Int,
+  intIssueWidth:          Int,
+  writeBackWidth:         Int,
+  wakeUpWidth:            Int,
 ) extends SerializableModuleParameter {
 
   def usingVector = hasInstructionSet("rv_v")
@@ -222,6 +228,7 @@ case class GroomParameter(
   )
 
   val frontendParameter: FrontendParameter = FrontendParameter(
+    xLen = xLen,
     fetchBytes = 16,
     instBytes = 4,
     nSets = 64,
@@ -235,12 +242,12 @@ case class GroomParameter(
 
   val renameParameter: RenameParameter = RenameParameter(
     renameWidth = renameWidth,
-    commitWidth = 1,
+    commitWidth = commitWidth,
     pregNum = 128,
     lregNum = 32,
     instBytes = 4,
     paddrBits = 32,
-    wakeUpWidth = 1,
+    wakeUpWidth = wakeUpWidth,
     delaySize = 3,
   )
 
@@ -248,8 +255,8 @@ case class GroomParameter(
     paddrBits = paddrBits,
     dispatchWidth = 3,
     issueSlotNum = 10,
-    wakeUpWidth = 1,
-    issueWidth = 1,
+    wakeUpWidth = wakeUpWidth,
+    issueWidth = intIssueWidth,
     pregNum = 128,
     delayWidth = 3,
     robNum = robNum,
@@ -265,7 +272,7 @@ case class GroomParameter(
   val regFileParameter: RegFileParameter = RegFileParameter(
     xLen = xLen,
     paddrBits = paddrBits,
-    intIssueWidth = 1,
+    intIssueWidth = intIssueWidth,
     memIssueWidth = 0,
     pregNum = 128,
     uopSize = 4,
@@ -273,31 +280,22 @@ case class GroomParameter(
     decoderParameter = decoderParameter,
   )
 
-  val execUnitParameter: ExecUnitParameter = ExecUnitParameter(
+  val exeUnitParameter: ExeUnitParameter = ExeUnitParameter(
     xLen = xLen,
-    uopSize = 4,
-    intIssueWidth = 1,
-    paddrBits = 32,
-    pregNum = 128,
-    robNum = 32,
+    robNum = robNum,
+    pregNum = pregNum,
     decoderParameter = decoderParameter,
   )
 
-  val microOpParameter: MicroOpParameter = MicroOpParameter(
-    frontendParameter,
-    decoderParameter,
-    renameParameter,
-  )
-
   val robParameter: ROBParameter = ROBParameter(
+    xLen = xLen,
     dispatchWidth = 3,
-    commitWidth = 1,
+    commitWidth = commitWidth,
     robNum = 32,
     paddrBits = 32,
     lregNum = 32,
     pregNum = 128,
-    renameWidth = 3,
-    writebackWidth = 1,
+    writeBackWidth = writeBackWidth,
     decoderParameter = decoderParameter,
   )
 
@@ -306,11 +304,17 @@ case class GroomParameter(
 }
 
 class GroomInterface(parameter: GroomParameter) extends Bundle {
+  val reset: Bool = Input(Bool())
   val instructionFetchAXI: AXI4ROIrrevocable =
     org.chipsalliance.amba.axi4.bundle.AXI4ROIrrevocable(parameter.frontendParameter.iCacheParameter.instructionFetchParameter)
 }
 
-class Groom(val parameter: GroomParameter) extends Module with SerializableModule[GroomParameter] {
+class Groom(val parameter: GroomParameter)
+    extends Module
+    with SerializableModule[GroomParameter]
+    with ImplicitReset {
+
+  override protected def implicitReset: Reset = io.reset
 
   val io = IO(new GroomInterface(parameter))
   val frontend: Instance[Frontend] = Instantiate(new Frontend(parameter.frontendParameter))
@@ -375,27 +379,67 @@ class Groom(val parameter: GroomParameter) extends Module with SerializableModul
     w.bits.delay := 0.U
   }
 
-  val regFileStage: Instance[RegFileStage] = Instantiate(new RegFileStage(parameter.regFileParameter))
-  regFileStage.io.intIssuePacket := intIssueUnit.io.issuePacket
-
-  val execPacket = RegNext(intIssueUnit.io.issuePacket)
-
-  val execUnit: Instance[ExecutionUnit] = Instantiate(new ExecutionUnit(parameter.execUnitParameter))
-  execUnit.io.execUnitReq := regFileStage.io.execUnitReq
-  execUnit.io.execPacket := execPacket
-
-  regFileStage.io.execUnitResp := execUnit.io.execUnitResp
+  val rf = new RegFile(parameter.pregNum, parameter.xLen, true)
+  val intRaddr = intIssueUnit.io.issuePacket.map(_.bits.preg.psrc)
+  val intRs = RegNext(VecInit(intRaddr.map(a => VecInit(a.map(rf.read)))))
+  val exePacket = RegNext(intIssueUnit.io.issuePacket)
+  val intExeRs = Wire(Vec(parameter.intIssueWidth, Vec(2, UInt(parameter.xLen.W))))
 
   val rob: Instance[ROB] = Instantiate(new ROB(parameter.robParameter))
-  rob.io.enq := renamePacket
+
+  val writeBackPacket = VecInit(exePacket.zipWithIndex.map { case (e, i) =>
+    val exeUnit: Instance[ExeUnit] = Instantiate(new ExeUnit(parameter.exeUnitParameter))
+    exeUnit.io.in.valid := e.valid
+    exeUnit.io.in.bits.dw := e.bits.uop(parameter.decoderParameter.aluDoubleWords)
+    exeUnit.io.in.bits.fn := e.bits.uop(parameter.decoderParameter.aluFn)
+    exeUnit.io.in.bits.selAlu1 := e.bits.uop(parameter.decoderParameter.selAlu1)
+    exeUnit.io.in.bits.selAlu2 := e.bits.uop(parameter.decoderParameter.selAlu2)
+    exeUnit.io.in.bits.rsrc := intExeRs(i)
+    exeUnit.io.in.bits.imm := ImmGen(e.bits.uop(parameter.decoderParameter.selImm), e.bits.fetchPacket.inst)
+    exeUnit.io.in.bits.pc := e.bits.fetchPacket.pc
+    exeUnit.io.in.bits.robIdx := e.bits.robIdx
+    exeUnit.io.in.bits.wxd := e.bits.uop(parameter.decoderParameter.wxd)
+    exeUnit.io.in.bits.pdst := e.bits.preg.pdst
+    exeUnit.io.out
+  })
+
+  writeBackPacket.zipWithIndex.foreach { case (w, i) =>
+    rob.io.wb(i).valid := w.valid
+    rob.io.wb(i).bits := w.bits.robIdx
+    rf.write(w.bits.pdst, w.bits.data)
+  }
+
+  val bypassPacket = RegNext(writeBackPacket)
+
+  val bypassEn = VecInit(intRaddr.map { ra =>
+    VecInit(
+      VecInit(writeBackPacket.map { w =>
+        ra(0) === w.bits.pdst && w.valid && w.bits.wxd
+      }),
+      VecInit(writeBackPacket.map { w =>
+        ra(1) === w.bits.pdst && w.valid && w.bits.wxd
+      })
+    )
+  })
+
+  val bypassEnNext = RegNext(bypassEn)
+
+  intExeRs := intRs.zipWithIndex.map { case (rs, i) =>
+    VecInit(
+      Mux(bypassEnNext(i)(0).reduce(_||_), Mux1H(bypassEnNext(i)(0), bypassPacket.map(_.bits.data)), rs(0)),
+      Mux(bypassEnNext(i)(1).reduce(_||_), Mux1H(bypassEnNext(i)(1), bypassPacket.map(_.bits.data)), rs(1))
+    )
+  }
+
+  rob.io.reset := io.reset
+  rob.io.enq.valid := dispatch.io.robVld
+  dispatch.io.robRdy := rob.io.enq.ready
+  rob.io.enq.bits.zip(renamePacket).map(e => e._1 := e._2.bits)
   renamePacket.zip(rob.io.robIdx).foreach { case (r, idx) =>
     r.bits.robIdx := idx
   }
 
-  rob.io.wb.zip(execUnit.io.execUnitResp).foreach { case (wb, r) =>
-    wb.valid := r.valid
-    wb.bits := r.bits.robIdx
-  }
+  frontend.io.redirect := rob.io.flush
 
   rename.io.commit := rob.io.commit
 
