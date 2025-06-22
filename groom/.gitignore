@@ -10,7 +10,8 @@
 !*.cc
 !.gitignore
 !.scalafmt.conf
-!build.sc
+!build.mill
+!common.mill
 !README.md
 build/
 

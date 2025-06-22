@@ -115,7 +115,8 @@ class ICache(val parameter: ICacheParameter) extends Module with SerializableMod
   val s1s2Valid: Bool = s1Valid
   val s1s2Fire: Bool = s1s2Valid && s1s2Ready
 
-  val s2ValidNoKill: Bool = RegEnable(Mux(io.s2Kill, false.B, s1Valid), false.B, s1s2Ready | io.s2Kill)
+  val s2KillForRefill = io.instructionFetchAXI.r.bits.last && io.instructionFetchAXI.r.valid
+  val s2ValidNoKill: Bool = RegEnable(Mux(io.s2Kill | s2KillForRefill, false.B, s1Valid), false.B, s1s2Ready | io.s2Kill | s2KillForRefill)
   val s2Valid: Bool = !io.s2Kill && s2ValidNoKill
   val s2Hit: Bool = RegEnable(s1Hit, false.B, s1s2Fire)
   val s2HitWayNum: UInt = RegEnable(s1HitWayNum, 0.U, s1s2Fire)
@@ -124,7 +125,7 @@ class ICache(val parameter: ICacheParameter) extends Module with SerializableMod
   val data: UInt = RegEnable(dataArray.read(s1Idx ## s1HitWayNum ## s1FetchIdx), 0.U, s1s2Fire)
   // val data: UInt = dataArray.read(s1Idx ## s1HitWayNum ## s1FetchIdx, s1s2Fire)
 
-  s1s2Ready := !s2Valid || io.resp.ready
+  s1s2Ready := !s2Valid || (s2Hit && io.resp.ready)
 
   val refillIdx = s2Addr(parameter.untagBits-1, parameter.blockOffBits)
   val refillTag = s2Addr(parameter.paddrBits-1, parameter.untagBits)
@@ -134,10 +135,10 @@ class ICache(val parameter: ICacheParameter) extends Module with SerializableMod
   val refillWriteCntNext = Wire(UInt(log2Ceil(parameter.fetchBytes/parameter.busBytes).W))
   val refillCntNext = Wire(UInt(log2Ceil(parameter.blockBytes/parameter.fetchBytes).W))
   val refillBuf = RegEnable(refillData, 0.U, refillBufWriteEn)
-  val refillWriteCnt = RegEnable(refillWriteCntNext, 0.U, RegNext(refillBufWriteEn && !io.instructionFetchAXI.r.bits.last))
+  val refillWriteCnt = RegEnable(refillWriteCntNext, 0.U, RegNext(refillBufWriteEn))
   val refillWriteEn = refillWriteCnt === 3.U
   val refillCnt = RegEnable(refillCntNext, 0.U, refillWriteEn)
-  val refillLast = io.instructionFetchAXI.r.bits.last
+  val refillLast = io.instructionFetchAXI.r.bits.last && io.instructionFetchAXI.r.valid
   refillData := io.instructionFetchAXI.r.bits.data ## refillBuf(parameter.fetchBytes*8-1, parameter.busBytes*8)
   refillWriteCntNext := refillWriteCnt + 1.U
   refillCntNext := refillCnt + 1.U
@@ -181,6 +182,6 @@ class ICache(val parameter: ICacheParameter) extends Module with SerializableMod
   io.resp.valid := s2Valid && s2Hit
   io.resp.bits.data := data
   io.resp.bits.pc := s2Addr
-  io.cacheMissJump := RegNext(refillLast)
+  io.cacheMissJump := RegNext(refillLast && s2Valid)
   io.cacheMissJumpPc := s2Addr
 }

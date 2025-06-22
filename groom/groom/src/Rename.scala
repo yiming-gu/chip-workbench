@@ -72,9 +72,9 @@ class Rename(val parameter: RenameParameter) extends Module with SerializableMod
   val io = IO(new RenameInterface(parameter))
 
   val freeWillEmpty = Wire(Bool())
-  val renameVld = RegEnable(io.decodeLreg.valid, false.B, io.decodeLreg.ready)
+  val renameVld = RegEnable(Mux(io.redirect, false.B, io.decodeLreg.valid), false.B, io.decodeLreg.ready || io.redirect)
   io.decodeLreg.ready := !renameVld || io.renamePreg.fire
-  io.renamePreg.valid := renameVld && !freeWillEmpty
+  io.renamePreg.valid := renameVld && !freeWillEmpty && !io.redirect
 
   val preg = Wire(Vec(parameter.renameWidth, new RenamePreg(parameter.pregSize)))
   val renameTable = Module(new RenameTable(parameter.renameTableParameter))

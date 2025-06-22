@@ -61,10 +61,11 @@ class Frontend(val parameter: FrontendParameter) extends Module with Serializabl
   val fetchBuffer: Instance[FetchBuffer] = Instantiate(new FetchBuffer(parameter.fetchBufferParameter))
 
   val snpc = Wire(UInt(32.W))
-  val pc = RegEnable(snpc, "h80000000".U(32.W), iCache.io.req.fire)
+  val dnpc = Wire(UInt(32.W))
+  val pc = RegEnable(Mux(io.redirect.valid, dnpc, snpc), "h80000000".U(32.W), iCache.io.req.fire || io.redirect.valid)
   // val pc = io.pc
 
-  val dnpc = MuxCase(pc, Seq(
+  dnpc := MuxCase(pc, Seq(
     io.redirect.valid -> io.redirect.bits.pc,
     iCache.io.cacheMissJump -> iCache.io.cacheMissJumpPc,
   ))

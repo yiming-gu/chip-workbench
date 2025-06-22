@@ -339,6 +339,7 @@ class Groom(val parameter: GroomParameter)
     r.valid := RegEnable(f.valid, false.B, frontend.io.frontendPacket.fire)
     r.bits.fetchPacket := RegEnable(f.bits, 0.U.asTypeOf(new FetchPacket(parameter.paddrBits)), frontend.io.frontendPacket.fire)
     r.bits.uop := RegEnable(u, 0.U.asTypeOf(parameter.decoderParameter.table.bundle), frontend.io.frontendPacket.fire)
+    r.bits.needFlush := false.B
   }
 
   rename.io.decodeLreg.valid := frontend.io.frontendPacket.valid
@@ -353,7 +354,6 @@ class Groom(val parameter: GroomParameter)
     lreg.ldst := r.bits.fetchPacket.inst(11, 7)
     r.bits.preg := preg
   }
-  rename.io.redirect := false.B
 
   val dispatch: Instance[Dispatch] = Instantiate(new Dispatch(parameter.dispatchParameter))
   dispatch.io.renameVld.valid := rename.io.renamePreg.valid
@@ -394,6 +394,9 @@ class Groom(val parameter: GroomParameter)
     exeUnit.io.in.bits.fn := e.bits.uop(parameter.decoderParameter.aluFn)
     exeUnit.io.in.bits.selAlu1 := e.bits.uop(parameter.decoderParameter.selAlu1)
     exeUnit.io.in.bits.selAlu2 := e.bits.uop(parameter.decoderParameter.selAlu2)
+    exeUnit.io.in.bits.isJal := e.bits.uop(parameter.decoderParameter.isJal)
+    exeUnit.io.in.bits.isJalr := e.bits.uop(parameter.decoderParameter.isJalr)
+    exeUnit.io.in.bits.isBranch := e.bits.uop(parameter.decoderParameter.isBranch)
     exeUnit.io.in.bits.rsrc := intExeRs(i)
     exeUnit.io.in.bits.imm := ImmGen(e.bits.uop(parameter.decoderParameter.selImm), e.bits.fetchPacket.inst)
     exeUnit.io.in.bits.pc := e.bits.fetchPacket.pc
@@ -405,7 +408,9 @@ class Groom(val parameter: GroomParameter)
 
   writeBackPacket.zipWithIndex.foreach { case (w, i) =>
     rob.io.wb(i).valid := w.valid
-    rob.io.wb(i).bits := w.bits.robIdx
+    rob.io.wb(i).bits.robIdx := w.bits.robIdx
+    rob.io.wb(i).bits.needFlush := w.bits.cfiTaken
+    rob.io.wb(i).bits.dnpc := w.bits.dnpc
     rf.write(w.bits.pdst, w.bits.data)
   }
 
@@ -441,6 +446,7 @@ class Groom(val parameter: GroomParameter)
 
   frontend.io.redirect := rob.io.flush
 
+  rename.io.redirect := rob.io.flush.valid
   rename.io.commit := rob.io.commit
 
   io.instructionFetchAXI <> frontend.io.instructionFetchAXI

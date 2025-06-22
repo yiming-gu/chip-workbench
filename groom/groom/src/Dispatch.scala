@@ -26,8 +26,8 @@ class DispatchInterface(parameter: DispatchParameter) extends Bundle {
   val renameVld = Flipped(DecoupledIO(Vec(parameter.renameWidth, new RenameVld())))
   val intIqVld = Output(Vec(parameter.dispatchWidth, Bool()))
   val intIqRdy = Input(Vec(parameter.dispatchWidth, Bool()))
-  // val memIqVld = Output(Vec(parameter.dispatchWidth, Bool()))
-  // val memIqRdy = Input(Vec(parameter.dispatchWidth, Bool()))
+  val memIqVld = Output(Vec(parameter.dispatchWidth, Bool()))
+  val memIqRdy = Input(Vec(parameter.dispatchWidth, Bool()))
   val robVld = Output(Bool())
   val robRdy = Input(Bool())
 }
@@ -43,16 +43,16 @@ class Dispatch(val parameter: DispatchParameter) extends Module with Serializabl
   val intIqVldNumOH = Seq.tabulate(parameter.dispatchWidth)(i => (i+1).U===intIqVldNum)
   val intIqMatch = intIqVldNumOH.zip(io.intIqRdy).map { case (vld, rdy) => vld && rdy }.reduce(_||_)
 
-  io.intIqVld := intIqVld.map(_ && intIqMatch && io.robRdy)
+  io.intIqVld := intIqVld.map(_ && io.renameVld.ready)
 
-  // io.renameVld.bits.zipWithIndex.foreach { case (rvld, i) =>
-  //   io.intIqVld(i) := intIqVld
-  //   // io.memIqVld(i) := rvld.instType && io.renameVld.valid
-  // }
+  val memIqVld = io.renameVld.bits.map(io.renameVld.valid && _.instType)
+  val memIqVldNum = PopCount(memIqVld)
+  val memIqVldNumOH = Seq.tabulate(parameter.dispatchWidth)(i => (i+1).U===memIqVldNum)
+  val memIqMatch = memIqVldNumOH.zip(io.memIqRdy).map { case (vld, rdy) => vld && rdy }.reduce(_||_)
 
-  // val memIqFire = VecInit(io.memIqVld.zip(io.memIqRdy).map { case (vld, rdy) => vld && rdy })
+  io.memIqVld := memIqVld.map(_ && io.renameVld.ready)
 
-  // io.renameVld.ready := (intIqFire.asUInt | memIqFire.asUInt).andR
+  io.renameVld.ready := intIqMatch && memIqMatch && io.robRdy
   io.renameVld.ready := intIqMatch && io.robRdy
   io.robVld := io.renameVld.fire
 }

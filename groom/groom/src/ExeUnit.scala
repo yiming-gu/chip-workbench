@@ -64,8 +64,25 @@ class ExeUnit(val parameter: ExeUnitParameter) extends Module with SerializableM
   alu.io.in1 := op1.asUInt
   alu.io.in2 := op2.asUInt
   io.out.valid := io.in.valid
-  io.out.bits.data := alu.io.out
+  io.out.bits.data := Mux(io.in.bits.isJalr, (io.in.bits.pc.asSInt + 4.S).asUInt, alu.io.out)
   io.out.bits.robIdx := io.in.bits.robIdx
   io.out.bits.wxd := io.in.bits.wxd
   io.out.bits.pdst := io.in.bits.pdst
+
+  val branchTaken = alu.io.cmp_out
+  val cfiTaken = io.in.bits.isJal || io.in.bits.isJalr || (io.in.bits.isBranch && branchTaken)
+  val branchTarget: SInt = io.in.bits.pc.asSInt +
+    Mux(
+      (io.in.bits.isBranch && branchTaken) || io.in.bits.isJal,
+      io.in.bits.imm,
+      4.S
+    )
+  val dnpc: UInt = (Mux(
+      io.in.bits.isJalr,
+      alu.io.out.asSInt,
+      branchTarget
+    ) & (-2).S).asUInt
+
+  io.out.bits.cfiTaken := cfiTaken
+  io.out.bits.dnpc := dnpc
 }

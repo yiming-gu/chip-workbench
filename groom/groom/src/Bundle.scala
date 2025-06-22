@@ -25,6 +25,7 @@ class MicroOp(paddrBits: Int, decoderParameter: DecoderParameter, pregSize: Int,
   val uop         = decoderParameter.table.bundle
   val preg        = new RenamePreg(pregSize)
   val robIdx      = UInt(robSize.W)
+  val needFlush   = Bool()
 }
 
 class ExuInput(xLen: Int, pregSize: Int, robSize: Int, decoderParameter: DecoderParameter) extends Bundle {
@@ -32,6 +33,9 @@ class ExuInput(xLen: Int, pregSize: Int, robSize: Int, decoderParameter: Decoder
   val fn = UInt(decoderParameter.UOPALU.width.W)
   val selAlu1 = UInt(decoderParameter.UOPA1.width.W)
   val selAlu2 = UInt(decoderParameter.UOPA2.width.W)
+  val isJal = Bool()
+  val isJalr = Bool()
+  val isBranch = Bool()
   val pc = UInt(xLen.W)
   val imm = SInt(xLen.W)
   val rsrc = Vec(2, UInt(xLen.W))
@@ -45,6 +49,8 @@ class ExuOutput(xLen: Int, robSize: Int, pregSize: Int) extends Bundle {
   val data = UInt(xLen.W)
   val robIdx = UInt(robSize.W)
   val pdst = UInt(pregSize.W)
+  val cfiTaken = Bool()
+  val dnpc = UInt(xLen.W)
 }
 
 class RobEntry(lregSize: Int, pregSize: Int, xLen: Int) extends Bundle {
@@ -55,6 +61,7 @@ class RobEntry(lregSize: Int, pregSize: Int, xLen: Int) extends Bundle {
   val pc = UInt(xLen.W)
   val writebacked = Bool()
   val needFlush = Bool()
+  val dnpc = UInt(xLen.W)
 }
 
 class RobCommit(commitWidth: Int, lregSize: Int, pregSize: Int) extends Bundle {
@@ -65,6 +72,13 @@ class RobCommit(commitWidth: Int, lregSize: Int, pregSize: Int) extends Bundle {
   val wxd = Vec(commitWidth, Bool())
   val ldst = Vec(commitWidth, UInt(lregSize.W))
   val pdst = Vec(commitWidth, UInt(pregSize.W))
+  val pc = Vec(commitWidth, UInt(32.W))
+}
+
+class RobWb(xLen: Int, robSize: Int) extends Bundle {
+  val robIdx = UInt(robSize.W)
+  val needFlush = Bool()
+  val dnpc = UInt(xLen.W)
 }
 
 class Redirect(xLen: Int) extends Bundle{
@@ -74,4 +88,15 @@ class Redirect(xLen: Int) extends Bundle{
 class RobIdx(robSize: Int) extends Bundle {
   val robIdx = UInt(robSize.W)
   val robIdxFlag = Bool()
+}
+
+class LqEntry(robSize: Int, xLen: Int) extends Bundle {
+  val robIdx = UInt(robSize.W)
+  val addr = UInt(xLen.W)
+}
+
+class LqWb(lqSize: Int, xLen: Int) extends Bundle {
+  val lqIdx = UInt(lqSize.W)
+  val addr = UInt(xLen.W)
+  val dataValid = Bool()
 }

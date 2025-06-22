@@ -416,6 +416,7 @@ package object rtl {
     robEntry.ldst := robEnq.fetchPacket.inst(11, 7)
     robEntry.pdst := robEnq.preg.pdst
     robEntry.writebacked := false.B
+    robEntry.needFlush := robEnq.needFlush
   }
 
   def robConnectCommit(robCommit: RobCommit, robEntry: RobEntry): Unit = {

@@ -88,6 +88,10 @@ class FetchBuffer(val parameter: FetchBufferParameter) extends Module with Seria
       tailFlag := !tailFlag
     }
   }
+  val tailFlagNext =
+    (tailPOH(parameter.fetchBufferEntries - 1,
+             parameter.fetchBufferEntries - parameter.fetchWidth).orR &&
+    tailPOHNext(parameter.fetchWidth - 1, 0).orR) ^ tailFlag
 
   val headPOHNext = inc(headPOH)
   when (io.deq.fire) {
@@ -99,8 +103,8 @@ class FetchBuffer(val parameter: FetchBufferParameter) extends Module with Seria
 
   val tailPOHDeq = VecInit.tabulate(parameter.fetchPacketNum)(i => tailPOH((i+1)*parameter.decodeWidth - 1, i * parameter.decodeWidth).orR).asUInt
   val tailPOHNextDeq = VecInit.tabulate(parameter.fetchPacketNum)(i => tailPOHNext((i+1)*parameter.decodeWidth - 1, i * parameter.decodeWidth).orR).asUInt
-  val full = tailPOH === tailPOHDeq && tailFlag =/= headFlag
-  val willFull  = headPOH === tailPOHNextDeq
+  val full = headPOH === tailPOHDeq && headFlag =/= tailFlag
+  val willFull  = headPOH === tailPOHNextDeq && headFlag =/= tailFlagNext
   val empty = headPOH === tailPOHDeq && headFlag === tailFlag
 
   io.deq.valid := !empty

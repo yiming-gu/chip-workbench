@@ -39,7 +39,7 @@ class ROBInterface(parameter: ROBParameter) extends Bundle {
   ))))
   val robIdx = Vec(parameter.dispatchWidth, Output(UInt(parameter.robSize.W)))
   // writeback
-  val wb = Vec(parameter.writeBackWidth, Flipped(ValidIO(UInt(parameter.robSize.W))))
+  val wb = Vec(parameter.writeBackWidth, Flipped(ValidIO(new RobWb(parameter.xLen, parameter.robSize))))
   // commit
   val commit = Output(new RobCommit(
     parameter.commitWidth,
@@ -99,7 +99,9 @@ class ROB(val parameter: ROBParameter)
 
   io.wb.foreach { wb =>
     when (wb.valid) {
-      robEntries(wb.bits).writebacked := true.B
+      robEntries(wb.bits.robIdx).writebacked := true.B
+      robEntries(wb.bits.robIdx).needFlush := wb.bits.needFlush
+      robEntries(wb.bits.robIdx).dnpc := wb.bits.dnpc
     }
   }
 
@@ -130,16 +132,16 @@ class ROB(val parameter: ROBParameter)
   val allCommitted = io.commit.isCommit && io.commit.commitValid.last
   val allowOnlyOneCommit = VecInit(commitCandidates.map(x => x.valid && x.writebacked && x.needFlush)).asUInt.orR
 
-  when (allCommitted) {
+  when (allCommitted || flush) {
     hasCommitted := 0.U.asTypeOf(hasCommitted)
   }
   .elsewhen (io.commit.isCommit) {
     for (i <- 0 until parameter.commitWidth) {
-      hasCommitted(i) := commitValid(i) || hasCommitted(i)
+      hasCommitted(i) := io.commit.commitValid(i) || hasCommitted(i)
     }
   }
 
-  when (allCommitted) {
+  when (allCommitted || flush) {
     commitPOH := 1.U
   }
   .otherwise {
@@ -171,9 +173,11 @@ class ROB(val parameter: ROBParameter)
   io.commit.wxd := commitCandidates.map(_.wxd)
   io.commit.ldst := commitCandidates.map(_.ldst)
   io.commit.pdst := commitCandidates.map(_.pdst)
+  io.commit.pc := commitCandidates.map(_.pc)
+  dontTouch(io.commit.pc)
 
   val willFull = robEnqPOHVec.drop(1).map(p => p === robDeqPOH).reduce(_ || _)
-  io.enq.ready := !willFull
-  io.flush.valid := flush
-  io.flush.bits.pc := commitCandidates(OHToUInt(commitPOH)).pc
+  io.enq.ready := !willFull && !flush
+  io.flush.valid := RegNext(flush)
+  io.flush.bits.pc := RegNext(commitCandidates(OHToUInt(commitPOH)).dnpc)
 }
