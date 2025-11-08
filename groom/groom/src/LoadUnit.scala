@@ -8,11 +8,11 @@ import org.chipsalliance.rocketv.DecoderParameter
 import org.chipsalliance.t1.rtl._
 import groom._
 
-object LoadQueueParameter {
-  implicit def rwP: upickle.default.ReadWriter[LoadQueueParameter] = upickle.default.macroRW[LoadQueueParameter]
+object LoadUnitParameter {
+  implicit def rwP: upickle.default.ReadWriter[LoadUnitParameter] = upickle.default.macroRW[LoadUnitParameter]
 }
 
-case class LoadQueueParameter(
+case class LoadUnitParameter(
   xLen: Int,
   dispatchWidth: Int,
   commitWidth: Int,
@@ -30,28 +30,28 @@ case class LoadQueueParameter(
   val pregSize = log2Ceil(pregNum)
 }
 
-class LoadQueueInterface(parameter: LoadQueueParameter) extends Bundle {
+class LoadUnitInterface(parameter: LoadUnitParameter) extends Bundle {
   val reset = Input(Bool())
   // enq
-  val enq = Flipped(DecoupledIO(Vec(parameter.dispatchWidth, Flipped(ValidIO(new MicroOp(
+  val enq = Flipped(DecoupledIO(Vec(parameter.dispatchWidth, new MicroOp(
     parameter.paddrBits,
     parameter.decoderParameter,
     parameter.pregSize,
     parameter.robSize
-  ))))))
+  ))))
 
   val wb = Flipped(ValidIO(new LqWb(parameter.lqSize, parameter.xLen)))
 
-  val lqIdx = Vec(parameter.dispatchWidth, Output(new LqIdx(parameter.lqSize)))
+  val lqIdx = Vec(parameter.dispatchWidth, Output(UInt(parameter.lqSize.W)))
 }
 
 @instantiable
-class LoadQueue(val parameter: LoadQueueParameter)
+class LoadUnit(val parameter: LoadUnitParameter)
     extends Module
-    with SerializableModule[LoadQueueParameter] {
+    with SerializableModule[LoadUnitParameter] {
 
   @public
-  val io = IO(new LoadQueueInterface(parameter))
+  val io = IO(new LoadUnitInterface(parameter))
 
   val lqEntries = Reg(Vec(parameter.lqNum, new LqEntry(parameter.robSize, parameter.xLen)))
   val allocated = RegInit(VecInit(Seq.fill(parameter.lqNum)(false.B)))
@@ -66,7 +66,6 @@ class LoadQueue(val parameter: LoadQueueParameter)
   val lqEnqPOHVec = VecInit.tabulate(parameter.dispatchWidth)(lqEnqPOHShift.left)
   val lqEnqPVec = VecInit(lqEnqPOHVec.map(OHToUInt(_)))
 
-  val enqValid: Seq[Bool] = io.enq.bits.map(_.valid)
   val flush = Wire(Bool())
 
   when (flush) {
@@ -77,12 +76,7 @@ class LoadQueue(val parameter: LoadQueueParameter)
 
   when (io.enq.fire) {
     for (i <- 0 until parameter.dispatchWidth) {
-      val idx = lqEnqPVec(PopCount(enqValid.take(i)))
-      val idxOH = lqEnqPOHVec(PopCount(enqValid.take(i)))
-      io.lqIdx(i).idx  := idx
-      io.lqIdx(i).flag := Mux(lqEnqPOH(parameter.lqNum - 1,
-                                       parameter.lqNum - parameter.dispatchWidth).orR &&
-                              idxOH(parameter.dispatchWidth - 1, 0).orR, !lqEnqFlag, lqEnqFlag)
+      val idx = lqEnqPVec(i)
       allocated(idx) := true.B
     }
   }
@@ -92,7 +86,7 @@ class LoadQueue(val parameter: LoadQueueParameter)
     writebacked(io.wb.bits.lqIdx) := io.wb.bits.dataValid
   }
 
-  val lqEnqPOHNext = lqEnqPOHVec(PopCount(enqValid))
+  val lqEnqPOHNext = lqEnqPOHShift.left(parameter.dispatchWidth)
   when (io.enq.fire) {
     lqEnqPOH := lqEnqPOHNext
     when (lqEnqPOH(parameter.lqNum - 1,
@@ -131,6 +125,7 @@ class LoadQueue(val parameter: LoadQueueParameter)
   }
 
   val empty = lqEnqPOH === lqDeqPOH && lqEnqFlag === lqDeqFlag
+  io.lqIdx := lqEnqPVec
 
   val willFull = lqEnqPOHVec.drop(1).map(p => p === lqDeqPOH).reduce(_ || _)
   io.enq.ready := !willFull && !flush

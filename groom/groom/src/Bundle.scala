@@ -100,3 +100,19 @@ class LqWb(lqSize: Int, xLen: Int) extends Bundle {
   val addr = UInt(xLen.W)
   val dataValid = Bool()
 }
+
+class SqWb(sqSize: Int, xLen: Int) extends Bundle {
+  val sqIdx = UInt(sqSize.W)
+  val addr = UInt(xLen.W)
+  val dataValid = Bool()
+}
+
+class LqIdx(lqSize: Int) extends Bundle {
+  val idx = UInt(lqSize.W)
+  val flag = Bool()
+}
+
+class SqIdx(sqSize: Int) extends Bundle {
+  val idx = UInt(sqSize.W)
+  val flag = Bool()
+}
